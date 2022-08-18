@@ -1,3 +1,11 @@
 :host {
   display: inline-block;
 }
+
+/*
+ * Add a :host display style that respects the hidden attribute.
+ * https://web.dev/custom-elements-best-practices/
+ */
+:host([hidden]) {
+  display: none;
+}
