@@ -3,10 +3,18 @@
   "version": "0.0.1",
   "description": "Baby's first HTML5 <video> element",
   "private": true,
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "type": "module",
+  "main": "./dist/baby-video.umd.cjs",
+  "module": "./dist/baby-video.js",
+  "exports": {
+    ".": {
+      "import": "./dist/baby-video.js",
+      "require": "./dist/baby-video.umd.cjs"
+    }
   },
+  "files": [
+    "dist"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/MattiasBuelens/baby-video.git"
@@ -17,5 +25,14 @@
   "bugs": {
     "url": "https://github.com/MattiasBuelens/baby-video/issues"
   },
-  "homepage": "https://github.com/MattiasBuelens/baby-video#readme"
+  "homepage": "https://github.com/MattiasBuelens/baby-video#readme",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "typescript": "^4.7.4",
+    "vite": "^3.0.8"
+  }
 }
