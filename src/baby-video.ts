@@ -1,7 +1,7 @@
 export class BabyVideoElement extends HTMLElement {
-    constructor() {
-        super();
-    }
+  constructor() {
+    super();
+  }
 }
 
-customElements.define('baby-video', BabyVideoElement);
+customElements.define("baby-video", BabyVideoElement);
