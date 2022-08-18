@@ -1,0 +1,20 @@
+{
+  "name": "baby-video",
+  "version": "0.0.1",
+  "description": "Baby's first HTML5 <video> element",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MattiasBuelens/baby-video.git"
+  },
+  "keywords": [],
+  "author": "Mattias Buelens <mattias@buelens.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/MattiasBuelens/baby-video/issues"
+  },
+  "homepage": "https://github.com/MattiasBuelens/baby-video#readme"
+}
