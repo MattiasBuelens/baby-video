@@ -2,6 +2,7 @@
   "name": "baby-video",
   "version": "0.0.1",
   "description": "Baby's first HTML5 <video> element",
+  "private": true,
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
