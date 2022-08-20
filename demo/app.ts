@@ -1,3 +1,3 @@
-import { BabyVideoElement } from "../src/baby-video";
+import { BabyVideoElement } from "../src/index";
 
 const video = document.querySelector<BabyVideoElement>("baby-video");
