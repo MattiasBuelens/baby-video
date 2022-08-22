@@ -63,11 +63,11 @@ export class BabyVideoElement extends HTMLElement {
 
   set srcObject(srcObject: BabyMediaSource | undefined) {
     if (this.#srcObject) {
-      detachFromMediaElement(this.#srcObject, this);
+      detachFromMediaElement(this.#srcObject);
     }
     this.#srcObject = srcObject;
     if (srcObject) {
-      attachToMediaElement(srcObject, this);
+      attachToMediaElement(srcObject);
     }
   }
 }
