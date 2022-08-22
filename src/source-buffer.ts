@@ -1,9 +1,10 @@
-import { queueTask, toUint8Array } from "./util";
+import { concatUint8Arrays, queueTask, toUint8Array } from "./util";
+import { BoxParser, MP4BoxStream } from "mp4box";
 import type { BabyMediaSource } from "./media-source";
 
 export class BabySourceBuffer extends EventTarget {
   readonly #parent: BabyMediaSource;
-  #inputBuffer: ArrayBuffer[] = [];
+  #inputBuffer: Uint8Array = new Uint8Array(0);
   #updating: boolean = false;
   #appendState: AppendState = AppendState.WAITING_FOR_SEGMENT;
 
@@ -21,7 +22,10 @@ export class BabySourceBuffer extends EventTarget {
     // 1. Run the prepare append algorithm.
     this.#prepareAppend();
     // 2. Add data to the end of the [[input buffer]].
-    this.#inputBuffer.push(toUint8Array(data).slice().buffer);
+    this.#inputBuffer = concatUint8Arrays(
+      this.#inputBuffer,
+      toUint8Array(data)
+    );
     // 3. Set the updating attribute to true.
     this.#updating = true;
     // 4. Queue a task to fire an event named updatestart at this SourceBuffer object.
@@ -63,7 +67,22 @@ export class BabySourceBuffer extends EventTarget {
   }
 
   #segmentParserLoop(): void {
-    // TODO
+    const stream = new MP4BoxStream(this.#inputBuffer.buffer);
+    let lastBoxStart = stream.getPosition();
+    while (true) {
+      const parseResult = BoxParser.parseOneBox(stream, false);
+      if (parseResult.code === BoxParser.ERR_NOT_ENOUGH_DATA) {
+        stream.seek(lastBoxStart);
+        break;
+      } else if (parseResult.code === BoxParser.ERR_INVALID_DATA) {
+        // TODO Handle parse errors
+        console.error(parseResult);
+      } else if (parseResult.code === BoxParser.OK) {
+        lastBoxStart = stream.getPosition();
+        console.log(parseResult.box, lastBoxStart);
+      }
+    }
+    this.#inputBuffer = this.#inputBuffer.slice(stream.getPosition());
   }
 }
 
