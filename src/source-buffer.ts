@@ -73,11 +73,11 @@ export class BabySourceBuffer extends EventTarget {
       while (true) {
         const parseResult = BoxParser.parseOneBox(stream, false);
         if (parseResult.code === BoxParser.ERR_NOT_ENOUGH_DATA) {
-          stream.seek(lastBoxStart);
           break;
         } else if (parseResult.code === BoxParser.ERR_INVALID_DATA) {
           // TODO Handle parse errors
           console.error(parseResult);
+          break;
         } else if (parseResult.code === BoxParser.OK) {
           lastBoxStart = stream.getPosition();
           console.log(parseResult.box, lastBoxStart);
