@@ -1,5 +1,6 @@
 import { BabySourceBuffer } from "./source-buffer";
 import { BabyVideoElement, updateDuration } from "./video-element";
+import { queueTask } from "./util";
 
 export type MediaSourceReadyState = "closed" | "ended" | "open";
 
@@ -8,6 +9,10 @@ export let attachToMediaElement: (
   mediaElement: BabyVideoElement
 ) => void;
 export let detachFromMediaElement: (mediaSource: BabyMediaSource) => void;
+export let endOfStream: (
+  mediaSource: BabyMediaSource,
+  error?: "network" | "decode"
+) => void;
 
 export class BabyMediaSource extends EventTarget {
   #duration: number = NaN;
@@ -87,6 +92,25 @@ export class BabyMediaSource extends EventTarget {
     return sourceBuffer;
   }
 
+  endOfStream(error?: "network" | "decode"): void {
+    // https://w3c.github.io/media-source/#dom-mediasource-endofstream
+    // 1. If the readyState attribute is not "open"
+    //    then throw an InvalidStateError exception and abort these steps.
+    if (this.#readyState !== "open") {
+      throw new DOMException("Ready state must be open", "InvalidStateError");
+    }
+    // 2. If the updating attribute equals true on any SourceBuffer in sourceBuffers,
+    //    then throw an InvalidStateError exception and abort these steps.
+    if (this.#sourceBuffers.some((sourceBuffer) => sourceBuffer.updating)) {
+      throw new DOMException(
+        "No source buffer must be updating",
+        "InvalidStateError"
+      );
+    }
+    // 3. Run the end of stream algorithm with the error parameter set to error.
+    this.#endOfStream(error);
+  }
+
   #attachToMediaElement(mediaElement: BabyVideoElement): void {
     // https://w3c.github.io/media-source/#mediasource-attach
     if (this.#readyState !== "closed") {
@@ -124,10 +148,32 @@ export class BabyMediaSource extends EventTarget {
     updateDuration(this.#mediaElement!);
   }
 
+  #endOfStream(error?: "network" | "decode") {
+    // https://w3c.github.io/media-source/#dfn-end-of-stream
+    // 1. Change the readyState attribute value to "ended".
+    this.#readyState = "ended";
+    // 2. Queue a task to fire an event named sourceended at the MediaSource.
+    queueTask(() => this.dispatchEvent(new Event("sourceended")));
+    // 3. If error is not set:
+    if (!error) {
+      // 3.1. Run the duration change algorithm with new duration set to
+      //      the largest track buffer ranges end time across all the track buffers
+      //      across all SourceBuffer objects in sourceBuffers.
+      // TODO
+      // 3.2. Notify the media element that it now has all of the media data.
+      // TODO
+    } else if (error === "network") {
+      // TODO
+    } else if (error === "decode") {
+      // TODO
+    }
+  }
+
   static {
     attachToMediaElement = (mediaSource, mediaElement) =>
       mediaSource.#attachToMediaElement(mediaElement);
     detachFromMediaElement = (mediaSource) =>
       mediaSource.#detachFromMediaElement();
+    endOfStream = (mediaSource, error) => mediaSource.#endOfStream(error);
   }
 }

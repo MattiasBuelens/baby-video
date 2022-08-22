@@ -1,6 +1,7 @@
 import { concatUint8Arrays, queueTask, toUint8Array } from "./util";
 import { BoxParser, MP4BoxStream } from "mp4box";
 import type { BabyMediaSource } from "./media-source";
+import { endOfStream } from "./media-source";
 
 export class BabySourceBuffer extends EventTarget {
   readonly #parent: BabyMediaSource;
@@ -75,8 +76,10 @@ export class BabySourceBuffer extends EventTarget {
         if (parseResult.code === BoxParser.ERR_NOT_ENOUGH_DATA) {
           break;
         } else if (parseResult.code === BoxParser.ERR_INVALID_DATA) {
-          // TODO Handle parse errors
-          console.error(parseResult);
+          // 2. If the [[input buffer]] contains bytes that violate the SourceBuffer
+          //    byte stream format specification, then run the append error algorithm
+          //    and abort this algorithm.
+          this.#appendError();
           break;
         } else if (parseResult.code === BoxParser.OK) {
           lastBoxStart = stream.getPosition();
@@ -86,6 +89,29 @@ export class BabySourceBuffer extends EventTarget {
     } finally {
       this.#inputBuffer = this.#inputBuffer.slice(stream.getPosition());
     }
+  }
+
+  #resetParserState() {
+    // https://w3c.github.io/media-source/#sourcebuffer-reset-parser-state
+    // TODO Steps 1 to 6
+    // 7. Remove all bytes from the [[input buffer]].
+    this.#inputBuffer = new Uint8Array(0);
+    // 8. Set [[append state]] to WAITING_FOR_SEGMENT.
+    this.#appendState = AppendState.WAITING_FOR_SEGMENT;
+  }
+
+  #appendError() {
+    // https://w3c.github.io/media-source/#dfn-append-error
+    // 1. Run the reset parser state algorithm.
+    this.#resetParserState();
+    // 2. Set the updating attribute to false.
+    this.#updating = false;
+    // 3. Queue a task to fire an event named error at this SourceBuffer object.
+    queueTask(() => this.dispatchEvent(new Event("error")));
+    // 4. Queue a task to fire an event named updateend at this SourceBuffer object.
+    queueTask(() => this.dispatchEvent(new Event("updateend")));
+    // 5. Run the end of stream algorithm with the error parameter set to "decode".
+    endOfStream(this.#parent, "decode");
   }
 }
 
