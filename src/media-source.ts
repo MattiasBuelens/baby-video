@@ -3,8 +3,43 @@ import { BabySourceBuffer } from "./source-buffer";
 export type MediaSourceReadyState = "closed" | "ended" | "open";
 
 export class BabyMediaSource extends EventTarget {
+  #duration: number = NaN;
   #readyState: MediaSourceReadyState = "closed";
   #sourceBuffers: BabySourceBuffer[] = [];
+
+  get duration(): number {
+    // https://w3c.github.io/media-source/#dom-mediasource-duration
+    if (this.#readyState === "closed") {
+      return NaN;
+    }
+    return this.#duration;
+  }
+
+  set duration(duration: number) {
+    // https://w3c.github.io/media-source/#dom-mediasource-duration
+    // 1. If the value being set is negative or NaN
+    //    then throw a TypeError exception and abort these steps.
+    if (duration < 0 || Number.isNaN(duration)) {
+      throw new TypeError("Invalid duration");
+    }
+    // 2. If the readyState attribute is not "open"
+    //    then throw an InvalidStateError exception and abort these steps.
+    if (this.#readyState !== "open") {
+      throw new DOMException("Ready state must be open", "InvalidStateError");
+    }
+    // 3. If the updating attribute equals true on any SourceBuffer in sourceBuffers,
+    //    then throw an InvalidStateError exception and abort these steps.
+    if (this.#sourceBuffers.some((sourceBuffer) => sourceBuffer.updating)) {
+      throw new DOMException(
+        "No source buffer must be updating",
+        "InvalidStateError"
+      );
+    }
+    // 4. Run the duration change algorithm with new duration
+    //   set to the value being assigned to this attribute.
+    // TODO
+    this.#duration = duration;
+  }
 
   get readyState(): MediaSourceReadyState {
     return this.#readyState;
@@ -58,6 +93,8 @@ export class BabyMediaSource extends EventTarget {
     // https://w3c.github.io/media-source/#mediasource-detach
     // 3. Set the readyState attribute to "closed".
     mediaSource.#readyState = "closed";
+    // 4. Update duration to NaN.
+    mediaSource.#duration = NaN;
     // 5. Remove all the SourceBuffer objects from activeSourceBuffers.
     // 7. Remove all the SourceBuffer objects from sourceBuffers.
     mediaSource.#sourceBuffers.length = 0;
