@@ -69,20 +69,20 @@ export class BabySourceBuffer extends EventTarget {
   #segmentParserLoop(): void {
     const stream = new MP4BoxStream(this.#inputBuffer.buffer);
     try {
-    let lastBoxStart = stream.getPosition();
-    while (true) {
-      const parseResult = BoxParser.parseOneBox(stream, false);
-      if (parseResult.code === BoxParser.ERR_NOT_ENOUGH_DATA) {
-        stream.seek(lastBoxStart);
-        break;
-      } else if (parseResult.code === BoxParser.ERR_INVALID_DATA) {
-        // TODO Handle parse errors
-        console.error(parseResult);
-      } else if (parseResult.code === BoxParser.OK) {
-        lastBoxStart = stream.getPosition();
-        console.log(parseResult.box, lastBoxStart);
+      let lastBoxStart = stream.getPosition();
+      while (true) {
+        const parseResult = BoxParser.parseOneBox(stream, false);
+        if (parseResult.code === BoxParser.ERR_NOT_ENOUGH_DATA) {
+          stream.seek(lastBoxStart);
+          break;
+        } else if (parseResult.code === BoxParser.ERR_INVALID_DATA) {
+          // TODO Handle parse errors
+          console.error(parseResult);
+        } else if (parseResult.code === BoxParser.OK) {
+          lastBoxStart = stream.getPosition();
+          console.log(parseResult.box, lastBoxStart);
+        }
       }
-    }
     } finally {
       this.#inputBuffer = this.#inputBuffer.slice(stream.getPosition());
     }
