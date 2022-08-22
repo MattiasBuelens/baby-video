@@ -68,6 +68,7 @@ export class BabySourceBuffer extends EventTarget {
 
   #segmentParserLoop(): void {
     const stream = new MP4BoxStream(this.#inputBuffer.buffer);
+    try {
     let lastBoxStart = stream.getPosition();
     while (true) {
       const parseResult = BoxParser.parseOneBox(stream, false);
@@ -82,7 +83,9 @@ export class BabySourceBuffer extends EventTarget {
         console.log(parseResult.box, lastBoxStart);
       }
     }
-    this.#inputBuffer = this.#inputBuffer.slice(stream.getPosition());
+    } finally {
+      this.#inputBuffer = this.#inputBuffer.slice(stream.getPosition());
+    }
   }
 }
 
