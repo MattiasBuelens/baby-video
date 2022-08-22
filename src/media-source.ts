@@ -1,4 +1,5 @@
 import { BabySourceBuffer } from "./source-buffer";
+import { BabyVideoElement, updateDuration } from "./video-element";
 
 export type MediaSourceReadyState = "closed" | "ended" | "open";
 
@@ -10,6 +11,7 @@ export let detachFromMediaElement: (mediaSource: BabyMediaSource) => void;
 
 export class BabyMediaSource extends EventTarget {
   #duration: number = NaN;
+  #mediaElement: BabyVideoElement | undefined;
   #readyState: MediaSourceReadyState = "closed";
   #sourceBuffers: BabySourceBuffer[] = [];
 
@@ -43,8 +45,7 @@ export class BabyMediaSource extends EventTarget {
     }
     // 4. Run the duration change algorithm with new duration
     //   set to the value being assigned to this attribute.
-    // TODO
-    this.#duration = duration;
+    this.#durationChange(duration);
   }
 
   get readyState(): MediaSourceReadyState {
@@ -86,17 +87,19 @@ export class BabyMediaSource extends EventTarget {
     return sourceBuffer;
   }
 
-  #attachToMediaElement(): void {
+  #attachToMediaElement(mediaElement: BabyVideoElement): void {
     // https://w3c.github.io/media-source/#mediasource-attach
     if (this.#readyState !== "closed") {
       throw new DOMException("Ready state must be closed", "InvalidStateError");
     }
+    this.#mediaElement = mediaElement;
     this.#readyState = "open";
     this.dispatchEvent(new Event("sourceopen"));
   }
 
   #detachFromMediaElement(): void {
     // https://w3c.github.io/media-source/#mediasource-detach
+    this.#mediaElement = undefined;
     // 3. Set the readyState attribute to "closed".
     this.#readyState = "closed";
     // 4. Update duration to NaN.
@@ -108,8 +111,22 @@ export class BabyMediaSource extends EventTarget {
     this.dispatchEvent(new Event("sourceclose"));
   }
 
+  #durationChange(duration: number): void {
+    // https://w3c.github.io/media-source/#duration-change-algorithm
+    // 1. If the current value of duration is equal to new duration, then return.
+    if (this.#duration === duration) {
+      return;
+    }
+    // 5. Update duration to new duration.
+    this.#duration = duration;
+    // 6.1. Update the media element's duration to new duration.
+    // 6.1. Run the HTMLMediaElement duration change algorithm.
+    updateDuration(this.#mediaElement!);
+  }
+
   static {
-    attachToMediaElement = (mediaSource) => mediaSource.#attachToMediaElement();
+    attachToMediaElement = (mediaSource, mediaElement) =>
+      mediaSource.#attachToMediaElement(mediaElement);
     detachFromMediaElement = (mediaSource) =>
       mediaSource.#detachFromMediaElement();
   }

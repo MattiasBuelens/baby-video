@@ -4,9 +4,12 @@ import {
   BabyMediaSource,
   detachFromMediaElement,
 } from "./media-source";
+import { queueTask } from "./util";
 
 const template = document.createElement("template");
 template.innerHTML = `<style>${stylesheet}</style>`;
+
+export let updateDuration: (videoElement: BabyVideoElement) => void;
 
 export class BabyVideoElement extends HTMLElement {
   readonly #canvas: HTMLCanvasElement;
@@ -57,6 +60,13 @@ export class BabyVideoElement extends HTMLElement {
     this.#currentTime = value;
   }
 
+  get duration(): number {
+    if (!this.#srcObject) {
+      return NaN;
+    }
+    return this.#srcObject.duration;
+  }
+
   get srcObject(): BabyMediaSource | undefined {
     return this.#srcObject;
   }
@@ -67,8 +77,18 @@ export class BabyVideoElement extends HTMLElement {
     }
     this.#srcObject = srcObject;
     if (srcObject) {
-      attachToMediaElement(srcObject);
+      attachToMediaElement(srcObject, this);
     }
+  }
+
+  static {
+    updateDuration = (videoElement: BabyVideoElement) => {
+      queueTask(() => videoElement.dispatchEvent(new Event("durationchange")));
+      const newDuration = videoElement.duration;
+      if (videoElement.currentTime > newDuration) {
+        videoElement.currentTime = newDuration;
+      }
+    };
   }
 }
 
