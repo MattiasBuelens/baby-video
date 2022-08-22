@@ -2,9 +2,13 @@ import { BabySourceBuffer } from "./source-buffer";
 
 export type MediaSourceReadyState = "closed" | "ended" | "open";
 
-export class BabyMediaSource {
+export class BabyMediaSource extends EventTarget {
   #readyState: MediaSourceReadyState = "closed";
   #sourceBuffers: BabySourceBuffer[] = [];
+
+  get readyState(): MediaSourceReadyState {
+    return this.#readyState;
+  }
 
   get sourceBuffers(): readonly BabySourceBuffer[] {
     return this.#sourceBuffers;
@@ -30,7 +34,7 @@ export class BabyMediaSource {
     //    then throw a QuotaExceededError exception and abort these steps.
     // 4. If the readyState attribute is not in the "open" state then throw an InvalidStateError exception and abort these steps.
     if (this.#readyState !== "open") {
-      throw new DOMException(`Ready state must be open`, "NotSupportedError");
+      throw new DOMException("Ready state must be open", "NotSupportedError");
     }
     // 5. Create a new SourceBuffer object and associated resources.
     const sourceBuffer = new BabySourceBuffer(this);
@@ -40,4 +44,30 @@ export class BabyMediaSource {
     // 9. Return the new object.
     return sourceBuffer;
   }
+
+  static _attachToMediaElement?(mediaSource: BabyMediaSource): void {
+    // https://w3c.github.io/media-source/#mediasource-attach
+    if (mediaSource.#readyState !== "closed") {
+      throw new DOMException("Ready state must be closed", "InvalidStateError");
+    }
+    mediaSource.#readyState = "open";
+    mediaSource.dispatchEvent(new Event("sourceopen"));
+  }
+
+  static _detachFromMediaElement?(mediaSource: BabyMediaSource): void {
+    // https://w3c.github.io/media-source/#mediasource-detach
+    // 3. Set the readyState attribute to "closed".
+    mediaSource.#readyState = "closed";
+    // 5. Remove all the SourceBuffer objects from activeSourceBuffers.
+    // 7. Remove all the SourceBuffer objects from sourceBuffers.
+    mediaSource.#sourceBuffers.length = 0;
+    // 9. Queue a task to fire an event named sourceclose at the MediaSource.
+    mediaSource.dispatchEvent(new Event("sourceclose"));
+  }
 }
+
+export const attachToMediaElement = BabyMediaSource._attachToMediaElement!;
+delete BabyMediaSource._attachToMediaElement;
+
+export const detachFromMediaElement = BabyMediaSource._detachFromMediaElement!;
+delete BabyMediaSource._detachFromMediaElement;

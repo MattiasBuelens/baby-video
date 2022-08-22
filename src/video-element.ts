@@ -1,4 +1,9 @@
 import stylesheet from "./style.css";
+import {
+  attachToMediaElement,
+  BabyMediaSource,
+  detachFromMediaElement,
+} from "./media-source";
 
 const template = document.createElement("template");
 template.innerHTML = `<style>${stylesheet}</style>`;
@@ -8,6 +13,7 @@ export class BabyVideoElement extends HTMLElement {
   readonly #canvasContext: CanvasRenderingContext2D;
 
   #currentTime: number = 0;
+  #srcObject: BabyMediaSource | undefined;
 
   constructor() {
     super();
@@ -31,6 +37,7 @@ export class BabyVideoElement extends HTMLElement {
     // Consider checking for properties that may have been set
     // before the element upgraded.
     // https://web.dev/custom-elements-best-practices/
+    this.#upgradeProperty("srcObject");
     this.#upgradeProperty("currentTime");
   }
 
@@ -48,6 +55,20 @@ export class BabyVideoElement extends HTMLElement {
 
   set currentTime(value: number) {
     this.#currentTime = value;
+  }
+
+  get srcObject(): BabyMediaSource | undefined {
+    return this.#srcObject;
+  }
+
+  set srcObject(srcObject: BabyMediaSource | undefined) {
+    if (this.#srcObject) {
+      detachFromMediaElement(this.#srcObject, this);
+    }
+    this.#srcObject = srcObject;
+    if (srcObject) {
+      attachToMediaElement(srcObject, this);
+    }
   }
 }
 
