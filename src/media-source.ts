@@ -2,6 +2,12 @@ import { BabySourceBuffer } from "./source-buffer";
 
 export type MediaSourceReadyState = "closed" | "ended" | "open";
 
+export let attachToMediaElement: (
+  mediaSource: BabyMediaSource,
+  mediaElement: BabyVideoElement
+) => void;
+export let detachFromMediaElement: (mediaSource: BabyMediaSource) => void;
+
 export class BabyMediaSource extends EventTarget {
   #duration: number = NaN;
   #readyState: MediaSourceReadyState = "closed";
@@ -80,31 +86,31 @@ export class BabyMediaSource extends EventTarget {
     return sourceBuffer;
   }
 
-  static _attachToMediaElement?(mediaSource: BabyMediaSource): void {
+  #attachToMediaElement(): void {
     // https://w3c.github.io/media-source/#mediasource-attach
-    if (mediaSource.#readyState !== "closed") {
+    if (this.#readyState !== "closed") {
       throw new DOMException("Ready state must be closed", "InvalidStateError");
     }
-    mediaSource.#readyState = "open";
-    mediaSource.dispatchEvent(new Event("sourceopen"));
+    this.#readyState = "open";
+    this.dispatchEvent(new Event("sourceopen"));
   }
 
-  static _detachFromMediaElement?(mediaSource: BabyMediaSource): void {
+  #detachFromMediaElement(): void {
     // https://w3c.github.io/media-source/#mediasource-detach
     // 3. Set the readyState attribute to "closed".
-    mediaSource.#readyState = "closed";
+    this.#readyState = "closed";
     // 4. Update duration to NaN.
-    mediaSource.#duration = NaN;
+    this.#duration = NaN;
     // 5. Remove all the SourceBuffer objects from activeSourceBuffers.
     // 7. Remove all the SourceBuffer objects from sourceBuffers.
-    mediaSource.#sourceBuffers.length = 0;
+    this.#sourceBuffers.length = 0;
     // 9. Queue a task to fire an event named sourceclose at the MediaSource.
-    mediaSource.dispatchEvent(new Event("sourceclose"));
+    this.dispatchEvent(new Event("sourceclose"));
+  }
+
+  static {
+    attachToMediaElement = (mediaSource) => mediaSource.#attachToMediaElement();
+    detachFromMediaElement = (mediaSource) =>
+      mediaSource.#detachFromMediaElement();
   }
 }
-
-export const attachToMediaElement = BabyMediaSource._attachToMediaElement!;
-delete BabyMediaSource._attachToMediaElement;
-
-export const detachFromMediaElement = BabyMediaSource._detachFromMediaElement!;
-delete BabyMediaSource._detachFromMediaElement;
