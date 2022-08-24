@@ -9,13 +9,26 @@ import { queueTask } from "./util";
 const template = document.createElement("template");
 template.innerHTML = `<style>${stylesheet}</style>`;
 
+export enum MediaReadyState {
+  HAVE_NOTHING,
+  HAVE_METADATA,
+  HAVE_CURRENT_DATA,
+  HAVE_FUTURE_DATA,
+  HAVE_ENOUGH_DATA,
+}
+
 export let updateDuration: (videoElement: BabyVideoElement) => void;
+export let updateReadyState: (
+  videoElement: BabyVideoElement,
+  newReadyState: MediaReadyState
+) => void;
 
 export class BabyVideoElement extends HTMLElement {
   readonly #canvas: HTMLCanvasElement;
   readonly #canvasContext: CanvasRenderingContext2D;
 
   #currentTime: number = 0;
+  #readyState: MediaReadyState = 0;
   #srcObject: BabyMediaSource | undefined;
 
   constructor() {
@@ -67,6 +80,10 @@ export class BabyVideoElement extends HTMLElement {
     return this.#srcObject.duration;
   }
 
+  get readyState(): MediaReadyState {
+    return this.#readyState;
+  }
+
   get srcObject(): BabyMediaSource | undefined {
     return this.#srcObject;
   }
@@ -88,6 +105,13 @@ export class BabyVideoElement extends HTMLElement {
       if (videoElement.currentTime > newDuration) {
         videoElement.currentTime = newDuration;
       }
+    };
+    updateReadyState = (
+      videoElement: BabyVideoElement,
+      newReadyState: MediaReadyState
+    ) => {
+      videoElement.#readyState = newReadyState;
+      // TODO https://html.spec.whatwg.org/multipage/media.html#ready-states
     };
   }
 }
