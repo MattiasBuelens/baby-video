@@ -10,18 +10,13 @@ import {
   VideoTrackInfo,
 } from "mp4box";
 import type { BabyMediaSource } from "./media-source";
-import {
-  durationChange,
-  endOfStream,
-  getMediaReadyState,
-  updateMediaReadyState,
-} from "./media-source";
+import { durationChange, endOfStream, getMediaElement } from "./media-source";
 import {
   AudioTrackBuffer,
   TrackBuffer,
   VideoTrackBuffer,
 } from "./track-buffer";
-import { MediaReadyState } from "./video-element";
+import { MediaReadyState, updateReadyState } from "./video-element";
 
 export class BabySourceBuffer extends EventTarget {
   readonly #parent: BabyMediaSource;
@@ -229,11 +224,11 @@ export class BabySourceBuffer extends EventTarget {
     }
     // 7. If the active track flag equals true, then run the following steps:
     if (activeTrack) {
-      const mediaReadyState = getMediaReadyState(this.#parent);
+      const mediaElement = getMediaElement(this.#parent)!;
       // 8.1. If the HTMLMediaElement.readyState attribute is greater than HAVE_CURRENT_DATA,
       //      then set the HTMLMediaElement.readyState attribute to HAVE_METADATA.
-      if (mediaReadyState >= MediaReadyState.HAVE_CURRENT_DATA) {
-        updateMediaReadyState(this.#parent, MediaReadyState.HAVE_METADATA);
+      if (mediaElement.readyState >= MediaReadyState.HAVE_CURRENT_DATA) {
+        updateReadyState(mediaElement, MediaReadyState.HAVE_METADATA);
       }
       // 9. If each object in sourceBuffers of the parent media source
       //    has [[first initialization segment received flag]] equal to true,
@@ -244,8 +239,8 @@ export class BabySourceBuffer extends EventTarget {
       ) {
         // 9.1. If the HTMLMediaElement.readyState attribute is HAVE_NOTHING,
         //      then set the HTMLMediaElement.readyState attribute to HAVE_METADATA.
-        if (mediaReadyState === MediaReadyState.HAVE_NOTHING) {
-          updateMediaReadyState(this.#parent, MediaReadyState.HAVE_METADATA);
+        if (mediaElement.readyState === MediaReadyState.HAVE_NOTHING) {
+          updateReadyState(mediaElement, MediaReadyState.HAVE_METADATA);
         }
       }
     }

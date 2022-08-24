@@ -1,10 +1,5 @@
 import { BabySourceBuffer } from "./source-buffer";
-import {
-  BabyVideoElement,
-  MediaReadyState,
-  updateDuration,
-  updateReadyState,
-} from "./video-element";
+import { BabyVideoElement, updateDuration } from "./video-element";
 import { queueTask } from "./util";
 
 export type MediaSourceReadyState = "closed" | "ended" | "open";
@@ -22,11 +17,9 @@ export let endOfStream: (
   mediaSource: BabyMediaSource,
   error?: "network" | "decode"
 ) => void;
-export let getMediaReadyState: (mediaSource: BabyMediaSource) => number;
-export let updateMediaReadyState: (
-  mediaSource: BabyMediaSource,
-  newReadyState: MediaReadyState
-) => void;
+export let getMediaElement: (
+  mediaSource: BabyMediaSource
+) => BabyVideoElement | undefined;
 
 export class BabyMediaSource extends EventTarget {
   #duration: number = NaN;
@@ -191,8 +184,6 @@ export class BabyMediaSource extends EventTarget {
     durationChange = (mediaSource, newDuration) =>
       mediaSource.#durationChange(newDuration);
     endOfStream = (mediaSource, error) => mediaSource.#endOfStream(error);
-    getMediaReadyState = (mediaSource) => mediaSource.#mediaElement!.readyState;
-    updateMediaReadyState = (mediaSource, newReadyState) =>
-      updateReadyState(mediaSource.#mediaElement!, newReadyState);
+    getMediaElement = (mediaSource) => mediaSource.#mediaElement;
   }
 }
