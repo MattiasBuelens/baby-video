@@ -1,13 +1,27 @@
 import { concatUint8Arrays, queueTask, toUint8Array } from "./util";
-import { BoxParser, MP4BoxStream } from "mp4box";
+import {
+  AudioTrackInfo,
+  BoxParser,
+  createFile,
+  Info,
+  ISOFile,
+  MP4ArrayBuffer,
+  MP4BoxStream,
+  VideoTrackInfo,
+} from "mp4box";
 import type { BabyMediaSource } from "./media-source";
-import { endOfStream } from "./media-source";
+import { durationChange, endOfStream } from "./media-source";
 
 export class BabySourceBuffer extends EventTarget {
   readonly #parent: BabyMediaSource;
   #inputBuffer: Uint8Array = new Uint8Array(0);
   #updating: boolean = false;
-  #appendState: AppendState = AppendState.WAITING_FOR_SEGMENT;
+  #firstInitializationSegmentReceived = false;
+
+  // MP4 specific things
+  #isoFile: ISOFile | undefined = undefined;
+  #isoFilePosition: number = 0;
+  #mp4Info: Info | undefined = undefined;
 
   constructor(parent: BabyMediaSource) {
     super();
@@ -53,10 +67,10 @@ export class BabySourceBuffer extends EventTarget {
     // TODO Steps 3 to 7
   }
 
-  #bufferAppend(): void {
+  async #bufferAppend(): Promise<void> {
     // https://w3c.github.io/media-source/#dfn-buffer-append
     // 1. Run the segment parser loop algorithm.
-    this.#segmentParserLoop();
+    await this.#segmentParserLoop();
     // 2. If the segment parser loop algorithm in the previous step was aborted,
     //    then abort this algorithm.
     // 3. Set the updating attribute to false.
@@ -67,13 +81,14 @@ export class BabySourceBuffer extends EventTarget {
     queueTask(() => this.dispatchEvent(new Event("updateend")));
   }
 
-  #segmentParserLoop(): void {
+  async #segmentParserLoop(): Promise<void> {
+    // https://w3c.github.io/media-source/#sourcebuffer-segment-parser-loop
     const stream = new MP4BoxStream(this.#inputBuffer.buffer);
     try {
-      let lastBoxStart = stream.getPosition();
       while (true) {
-        const parseResult = BoxParser.parseOneBox(stream, false);
+        const parseResult = BoxParser.parseOneBox(stream, true);
         if (parseResult.code === BoxParser.ERR_NOT_ENOUGH_DATA) {
+          // 7. Need more data: Return control to the calling algorithm.
           break;
         } else if (parseResult.code === BoxParser.ERR_INVALID_DATA) {
           // 2. If the [[input buffer]] contains bytes that violate the SourceBuffer
@@ -82,12 +97,86 @@ export class BabySourceBuffer extends EventTarget {
           this.#appendError();
           break;
         } else if (parseResult.code === BoxParser.OK) {
-          lastBoxStart = stream.getPosition();
-          console.log(parseResult.box, lastBoxStart);
+          const boxStart = parseResult.start;
+          const boxEnd = parseResult.start + parseResult.size;
+          const boxData = this.#inputBuffer.slice(boxStart, boxEnd).buffer;
+          await this.#parseBox(parseResult.type, boxData);
+          stream.seek(boxEnd);
         }
       }
     } finally {
       this.#inputBuffer = this.#inputBuffer.slice(stream.getPosition());
+    }
+  }
+
+  async #parseBox(boxType: string, boxData: ArrayBuffer): Promise<void> {
+    // https://w3c.github.io/media-source/#sourcebuffer-segment-parser-loop
+    console.log(boxType, boxData);
+    if (boxType === "ftyp") {
+      // 5.2. Run the initialization segment received algorithm.
+      this.#isoFile = createFile();
+      this.#isoFile.appendBuffer(toMP4ArrayBuffer(boxData, 0));
+      this.#isoFilePosition += boxData.byteLength;
+    } else if (boxType === "moov") {
+      // 5.2. Run the initialization segment received algorithm.
+      this.#isoFile!.appendBuffer(
+        toMP4ArrayBuffer(boxData, this.#isoFilePosition)
+      );
+      this.#isoFilePosition += boxData.byteLength;
+      this.#mp4Info = this.#isoFile!.getInfo();
+      await this.#initializationSegmentReceived(this.#mp4Info);
+    }
+  }
+
+  async #initializationSegmentReceived(info: Info): Promise<void> {
+    // https://w3c.github.io/media-source/#dfn-initialization-segment-received
+    // 1. Update the duration attribute if it currently equals NaN
+    if (Number.isNaN(this.#parent.duration)) {
+      if (info.duration > 0) {
+        // If the initialization segment contains a duration:
+        // Run the duration change algorithm with new duration set
+        // to the duration in the initialization segment.
+        durationChange(this.#parent, info.duration);
+      } else {
+        // Otherwise:
+        // Run the duration change algorithm with new duration set to positive Infinity.
+        durationChange(this.#parent, +Infinity);
+      }
+    }
+    // 2. If the initialization segment has no audio, video, or text tracks,
+    //    then run the append error algorithm and abort these steps.
+    if (info.audioTracks.length === 0 && info.videoTracks.length === 0) {
+      this.#appendError();
+      return;
+    }
+    // 3. If the [[first initialization segment received flag]] is true,
+    //    then run the following steps:
+    if (this.#firstInitializationSegmentReceived) {
+      // TODO Update track buffers
+    }
+    // 4. Let active track flag equal false.
+    let activeTrack = false;
+    // 5. If the [[first initialization segment received flag]] is false,
+    //    then run the following steps:
+    if (!this.#firstInitializationSegmentReceived) {
+      // 5.1. If the initialization segment contains tracks with codecs
+      //      the user agent does not support, then run the append error
+      //      algorithm and abort these steps.
+      const audioTrackConfigs = info.audioTracks.map(buildAudioConfig);
+      const videoTrackConfigs = info.videoTracks.map(buildVideoConfig);
+      for (const audioTrackConfig of audioTrackConfigs) {
+        if (!(await AudioDecoder.isConfigSupported(audioTrackConfig))) {
+          this.#appendError();
+          return;
+        }
+      }
+      for (const videoTrackConfig of videoTrackConfigs) {
+        if (!(await VideoDecoder.isConfigSupported(videoTrackConfig))) {
+          this.#appendError();
+          return;
+        }
+      }
+      // TODO Create track buffers
     }
   }
 
@@ -97,7 +186,7 @@ export class BabySourceBuffer extends EventTarget {
     // 7. Remove all bytes from the [[input buffer]].
     this.#inputBuffer = new Uint8Array(0);
     // 8. Set [[append state]] to WAITING_FOR_SEGMENT.
-    this.#appendState = AppendState.WAITING_FOR_SEGMENT;
+    //    (Ignored.)
   }
 
   #appendError() {
@@ -115,9 +204,22 @@ export class BabySourceBuffer extends EventTarget {
   }
 }
 
-// https://w3c.github.io/media-source/#dfn-append-state
-const enum AppendState {
-  WAITING_FOR_SEGMENT,
-  PARSING_INIT_SEGMENT,
-  PARSING_MEDIA_SEGMENT,
+function toMP4ArrayBuffer(ab: ArrayBuffer, fileStart: number): MP4ArrayBuffer {
+  return Object.assign(ab, { fileStart });
+}
+
+function buildAudioConfig(info: AudioTrackInfo): AudioDecoderConfig {
+  return {
+    codec: info.codec,
+    numberOfChannels: info.audio.channel_count,
+    sampleRate: info.audio.sample_rate,
+  };
+}
+
+function buildVideoConfig(info: VideoTrackInfo): VideoDecoderConfig {
+  return {
+    codec: info.codec,
+    codedWidth: info.video.width,
+    codedHeight: info.video.height,
+  };
 }

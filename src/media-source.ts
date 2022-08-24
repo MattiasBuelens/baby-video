@@ -9,6 +9,10 @@ export let attachToMediaElement: (
   mediaElement: BabyVideoElement
 ) => void;
 export let detachFromMediaElement: (mediaSource: BabyMediaSource) => void;
+export let durationChange: (
+  mediaSource: BabyMediaSource,
+  newDuration: number
+) => void;
 export let endOfStream: (
   mediaSource: BabyMediaSource,
   error?: "network" | "decode"
@@ -174,6 +178,8 @@ export class BabyMediaSource extends EventTarget {
       mediaSource.#attachToMediaElement(mediaElement);
     detachFromMediaElement = (mediaSource) =>
       mediaSource.#detachFromMediaElement();
+    durationChange = (mediaSource, newDuration) =>
+      mediaSource.#durationChange(newDuration);
     endOfStream = (mediaSource, error) => mediaSource.#endOfStream(error);
   }
 }
