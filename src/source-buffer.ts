@@ -7,6 +7,7 @@ import {
   ISOFile,
   MP4ArrayBuffer,
   MP4BoxStream,
+  Sample,
   VideoTrackInfo,
 } from "mp4box";
 import type { BabyMediaSource } from "./media-source";
@@ -132,6 +133,23 @@ export class BabySourceBuffer extends EventTarget {
       this.#isoFilePosition += boxData.byteLength;
       this.#mp4Info = this.#isoFile!.getInfo();
       await this.#initializationSegmentReceived(this.#mp4Info);
+    } else if (boxType === "moof" || boxType === "mdat") {
+      // 6.1. If the [[first initialization segment received flag]] is false
+      //      or the [[pending initialization segment for changeType flag]] is true,
+      //      then run the append error algorithm and abort this algorithm.
+      if (!this.#firstInitializationSegmentReceived) {
+        this.#appendError();
+        return;
+      }
+      this.#isoFile!.appendBuffer(
+        toMP4ArrayBuffer(boxData, this.#isoFilePosition)
+      );
+      this.#isoFilePosition += boxData.byteLength;
+      // 6.2. If the [[input buffer]] contains one or more complete coded frames,
+      //      then run the coded frame processing algorithm.
+      if (boxType === "mdat") {
+        this.#codedFrameProcessing();
+      }
     }
   }
 
@@ -243,6 +261,94 @@ export class BabySourceBuffer extends EventTarget {
           updateReadyState(mediaElement, MediaReadyState.HAVE_METADATA);
         }
       }
+    }
+  }
+
+  #codedFrameProcessing(): void {
+    // https://w3c.github.io/media-source/#sourcebuffer-coded-frame-processing
+    // 1. For each coded frame in the media segment run the following steps:
+    for (const trackBuffer of this.#trackBuffers) {
+      this.#isoFile!.setExtractionOptions(trackBuffer.trackId, undefined, {});
+    }
+    this.#isoFile!.onSamples = (trackId, _user, samples) =>
+      this.#processSamples(trackId, samples);
+    this.#isoFile!.start();
+    this.#isoFile!.flush();
+    this.#isoFile!.stop();
+    // 2. If the HTMLMediaElement.readyState attribute is HAVE_METADATA and the new coded frames
+    //    cause HTMLMediaElement.buffered to have a TimeRanges for the current playback position,
+    //    then set the HTMLMediaElement.readyState attribute to HAVE_CURRENT_DATA.
+    // TODO
+    // 3. If the HTMLMediaElement.readyState attribute is HAVE_CURRENT_DATA and the new coded frames
+    //    cause HTMLMediaElement.buffered to have a TimeRanges that includes the current playback position
+    //    and some time beyond the current playback position, then set the HTMLMediaElement.readyState
+    //    attribute to HAVE_FUTURE_DATA.
+    // TODO
+    // 4. If the HTMLMediaElement.readyState attribute is HAVE_FUTURE_DATA and the new coded frames
+    //    cause HTMLMediaElement.buffered to have a TimeRanges that includes the current playback position
+    //    and enough data to ensure uninterrupted playback, then set the HTMLMediaElement.readyState
+    //    attribute to HAVE_ENOUGH_DATA.
+    // TODO
+    // 5. If the media segment contains data beyond the current duration, then run the duration change
+    //    algorithm with new duration set to the maximum of the current duration and the [[group end timestamp]].
+    // TODO
+  }
+
+  #processSamples(trackId: number, samples: Sample[]): void {
+    // https://w3c.github.io/media-source/#sourcebuffer-coded-frame-processing
+    const trackBuffer = this.#trackBuffers.find(
+      (trackBuffer) => trackBuffer.trackId === trackId
+    )!;
+    // 1. For each coded frame in the media segment run the following steps:
+    for (let i = 0; i < samples.length; i++) {
+      const sample = samples[i];
+      // 1.1. Let presentation timestamp be a double precision floating point representation
+      //      of the coded frame's presentation timestamp in seconds.
+      const pts = sample.cts / sample.timescale;
+      // 1.2. Let decode timestamp be a double precision floating point representation
+      //      of the coded frame's decode timestamp in seconds.
+      const dts = sample.dts / sample.timescale;
+      // 4. If timestampOffset is not 0, then run the following steps:
+      // TODO timestampOffset
+      // 5. Let track buffer equal the track buffer that the coded frame will be added to.
+      // 6. If last decode timestamp for track buffer is set and decode timestamp
+      //    is less than last decode timestamp:
+      //     OR
+      //    If last decode timestamp for track buffer is set and the difference between
+      //    decode timestamp and last decode timestamp is greater than 2 times last frame duration:
+      if (
+        trackBuffer.lastDecodeTimestamp !== undefined &&
+        (dts < trackBuffer.lastDecodeTimestamp ||
+          dts - trackBuffer.lastDecodeTimestamp >
+            2 * trackBuffer.lastFrameDuration!)
+      ) {
+        // 6.2. Unset the last decode timestamp on all track buffers.
+        // 6.3. Unset the last frame duration on all track buffers.
+        // 6.4. Unset the highest end timestamp on all track buffers.
+        // 6.5. Set the need random access point flag on all track buffers to true.
+        for (const trackBuffer of this.#trackBuffers) {
+          trackBuffer.requireRandomAccessPoint();
+        }
+        // 6.6. Jump to the Loop Top step above to restart processing of the current coded frame.
+        i--;
+        continue;
+      }
+      // TODO 8 and 9 appendWindowStart and appendWindowEnd
+      // 10. If the need random access point flag on track buffer equals true,
+      //     then run the following steps:
+      if (trackBuffer.needRandomAccessPoint) {
+        // 10.1. If the coded frame is not a random access point, then drop the coded frame
+        //       and jump to the top of the loop to start processing the next coded frame.
+        if (!sample.is_sync) {
+          continue;
+        }
+        // 10.2. Set the need random access point flag on track buffer to false.
+        trackBuffer.needRandomAccessPoint = false;
+      }
+      // TODO 11 to 15 Remove overlapping frames
+      // Steps 16 to 19
+      trackBuffer.addSample(sample);
+      console.log({ pts, dts });
     }
   }
 

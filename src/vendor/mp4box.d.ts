@@ -65,9 +65,23 @@ declare module "mp4box" {
   }
 
   export interface ISOFile {
+    appendBuffer(ab: MP4ArrayBuffer): void;
+
     getInfo(): Info;
 
-    appendBuffer(ab: MP4ArrayBuffer): void;
+    setExtractionOptions(
+      trackId: number,
+      user: any,
+      options: ExtractionOptions
+    );
+
+    start(): void;
+
+    stop(): void;
+
+    flush(): void;
+
+    onSamples?: (trackId: number, user: any, samples: Sample[]) => void;
   }
 
   export interface Info {
@@ -118,5 +132,27 @@ declare module "mp4box" {
       width: number;
       height: number;
     };
+  }
+
+  export interface ExtractionOptions {
+    nbSamples?: number;
+  }
+
+  export interface Sample {
+    number: number;
+    track_id: number;
+    timescale: number;
+    description: Box;
+    size: number;
+    data: Uint8Array;
+    duration: number;
+    dts: number;
+    cts: number;
+    is_sync: boolean;
+    is_leading: number;
+    is_depended_on: number;
+    has_redundancy: number;
+    degradation_priority: number;
+    offset: number;
   }
 }
