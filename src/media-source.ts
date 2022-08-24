@@ -135,14 +135,14 @@ export class BabyMediaSource extends EventTarget {
     this.dispatchEvent(new Event("sourceclose"));
   }
 
-  #durationChange(duration: number): void {
+  #durationChange(newDuration: number): void {
     // https://w3c.github.io/media-source/#duration-change-algorithm
     // 1. If the current value of duration is equal to new duration, then return.
-    if (this.#duration === duration) {
+    if (this.#duration === newDuration) {
       return;
     }
     // 5. Update duration to new duration.
-    this.#duration = duration;
+    this.#duration = newDuration;
     // 6.1. Update the media element's duration to new duration.
     // 6.1. Run the HTMLMediaElement duration change algorithm.
     updateDuration(this.#mediaElement!);
