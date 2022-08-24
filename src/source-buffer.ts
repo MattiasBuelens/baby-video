@@ -10,13 +10,25 @@ import {
   VideoTrackInfo,
 } from "mp4box";
 import type { BabyMediaSource } from "./media-source";
-import { durationChange, endOfStream } from "./media-source";
+import {
+  durationChange,
+  endOfStream,
+  getMediaReadyState,
+  updateMediaReadyState,
+} from "./media-source";
+import {
+  AudioTrackBuffer,
+  TrackBuffer,
+  VideoTrackBuffer,
+} from "./track-buffer";
+import { MediaReadyState } from "./video-element";
 
 export class BabySourceBuffer extends EventTarget {
   readonly #parent: BabyMediaSource;
   #inputBuffer: Uint8Array = new Uint8Array(0);
   #updating: boolean = false;
   #firstInitializationSegmentReceived = false;
+  #trackBuffers: TrackBuffer[] = [];
 
   // MP4 specific things
   #isoFile: ISOFile | undefined = undefined;
@@ -176,7 +188,66 @@ export class BabySourceBuffer extends EventTarget {
           return;
         }
       }
-      // TODO Create track buffers
+      // 5.2. For each audio track in the initialization segment,
+      //      run following steps:
+      for (let i = 0; i < info.audioTracks.length; i++) {
+        const audioTrackInfo = info.audioTracks[i];
+        const audioTrackConfig = audioTrackConfigs[i];
+        // 5.2.6.7.2. Set active track flag to true.
+        activeTrack = true;
+        // 5.2.7. Create a new track buffer to store coded frames for this track.
+        // 5.2.8. Add the track description for this track to the track buffer.
+        const trackBuffer = new AudioTrackBuffer(
+          audioTrackInfo.id,
+          audioTrackConfig
+        );
+        this.#trackBuffers.push(trackBuffer);
+      }
+      // 5.3. For each video track in the initialization segment,
+      //      run following steps:
+      for (let i = 0; i < info.videoTracks.length; i++) {
+        const videoTrackInfo = info.videoTracks[i];
+        const videoTrackConfig = videoTrackConfigs[i];
+        // 5.3.6.7.2. Set active track flag to true.
+        activeTrack = true;
+        // 5.3.7. Create a new track buffer to store coded frames for this track.
+        // 5.3.8. Add the track description for this track to the track buffer.
+        const trackBuffer = new VideoTrackBuffer(
+          videoTrackInfo.id,
+          videoTrackConfig
+        );
+        this.#trackBuffers.push(trackBuffer);
+      }
+      // 5.5. If active track flag equals true, then run the following steps:
+      if (activeTrack) {
+        // 5.5.1. Add this SourceBuffer to activeSourceBuffers.
+        // 5.5.2. Queue a task to fire an event named addsourcebuffer at activeSourceBuffers
+        // TODO
+      }
+      // 5.6. Set [[first initialization segment received flag]] to true.
+      this.#firstInitializationSegmentReceived = true;
+    }
+    // 7. If the active track flag equals true, then run the following steps:
+    if (activeTrack) {
+      const mediaReadyState = getMediaReadyState(this.#parent);
+      // 8.1. If the HTMLMediaElement.readyState attribute is greater than HAVE_CURRENT_DATA,
+      //      then set the HTMLMediaElement.readyState attribute to HAVE_METADATA.
+      if (mediaReadyState >= MediaReadyState.HAVE_CURRENT_DATA) {
+        updateMediaReadyState(this.#parent, MediaReadyState.HAVE_METADATA);
+      }
+      // 9. If each object in sourceBuffers of the parent media source
+      //    has [[first initialization segment received flag]] equal to true,
+      if (
+        this.#parent.sourceBuffers.every(
+          (sourceBuffer) => sourceBuffer.#firstInitializationSegmentReceived
+        )
+      ) {
+        // 9.1. If the HTMLMediaElement.readyState attribute is HAVE_NOTHING,
+        //      then set the HTMLMediaElement.readyState attribute to HAVE_METADATA.
+        if (mediaReadyState === MediaReadyState.HAVE_NOTHING) {
+          updateMediaReadyState(this.#parent, MediaReadyState.HAVE_METADATA);
+        }
+      }
     }
   }
 
