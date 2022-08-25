@@ -1,6 +1,8 @@
 import { TimeRanges } from "./time-ranges";
 import { Sample } from "mp4box";
 
+const BUFFERED_TOLERANCE: number = 1e-6;
+
 export abstract class TrackBuffer {
   readonly trackId: number;
   codecConfig: AudioDecoderConfig | VideoDecoderConfig;
@@ -42,7 +44,8 @@ export abstract class TrackBuffer {
     //     and frame duration to the track buffer.
     this.addSampleInternal(sample);
     this.trackBufferRanges = this.trackBufferRanges.union(
-      new TimeRanges([[pts, frameEndTimestamp]])
+      new TimeRanges([[pts, frameEndTimestamp]]),
+      BUFFERED_TOLERANCE
     );
     // 17. Set last decode timestamp for track buffer to decode timestamp.
     this.lastDecodeTimestamp = dts;

@@ -43,7 +43,7 @@ export class TimeRanges {
     return new TimeRanges(ranges);
   }
 
-  union(other: TimeRanges): TimeRanges {
+  union(other: TimeRanges, tolerance: number = 0): TimeRanges {
     if (this.length === 0) {
       return other;
     }
@@ -53,7 +53,7 @@ export class TimeRanges {
     // Merge sorted inputs (we assume that the inputs are normalized)
     const sorted = this.#mergeSorted(other);
     // Merge overlaps
-    return sorted.#mergeOverlaps();
+    return sorted.#mergeOverlaps(tolerance);
   }
 
   #mergeSorted(other: TimeRanges): TimeRanges {
@@ -79,7 +79,7 @@ export class TimeRanges {
     return new TimeRanges(ranges);
   }
 
-  #mergeOverlaps(): TimeRanges {
+  #mergeOverlaps(tolerance: number = 0): TimeRanges {
     // Based on this::normalize from Mozilla Firefox
     // https://hg.mozilla.org/releases/mozilla-release/file/33c11529607b/dom/html/TimeRanges.cpp#l112
     const length = this.length;
@@ -96,7 +96,7 @@ export class TimeRanges {
       if (currentStart <= newStart && currentEnd >= newEnd) {
         continue;
       }
-      if (currentEnd >= newStart) {
+      if (currentEnd + tolerance >= newStart) {
         // Extend current range
         currentEnd = newEnd;
       } else {
