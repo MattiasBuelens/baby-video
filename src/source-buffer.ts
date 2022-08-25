@@ -18,6 +18,7 @@ import {
   VideoTrackBuffer,
 } from "./track-buffer";
 import { MediaReadyState, updateReadyState } from "./video-element";
+import { TimeRanges } from "./time-ranges";
 
 export class BabySourceBuffer extends EventTarget {
   readonly #parent: BabyMediaSource;
@@ -38,6 +39,49 @@ export class BabySourceBuffer extends EventTarget {
 
   get updating(): boolean {
     return this.#updating;
+  }
+
+  get buffered(): TimeRanges {
+    // https://w3c.github.io/media-source/#dom-sourcebuffer-buffered
+    // 1. If this object has been removed from the sourceBuffers attribute of the parent media source
+    //    then throw an InvalidStateError exception and abort these steps.
+    if (!this.#parent.sourceBuffers.includes(this)) {
+      throw new DOMException("Source buffer was removed", "InvalidStateError");
+    }
+    if (this.#trackBuffers.length === 0) {
+      return new TimeRanges([]);
+    }
+    // 2. Let highest end time be the largest track buffer ranges end time across
+    //    all the track buffers managed by this SourceBuffer object.
+    const highestEndTime = Math.max(
+      ...this.#trackBuffers.map((trackBuffer) => {
+        return trackBuffer.trackBufferRanges.length > 0
+          ? trackBuffer.trackBufferRanges.end(
+              trackBuffer.trackBufferRanges.length - 1
+            )
+          : 0;
+      })
+    );
+    // 3. Let intersection ranges equal a TimeRanges object containing a single range
+    //    from 0 to highest end time.
+    let intersectionRanges = new TimeRanges([[0, highestEndTime]]);
+    // 4. For each audio and video track buffer managed by this SourceBuffer, run the following steps:
+    for (const trackBuffer of this.#trackBuffers) {
+      // 4.1. Let track ranges equal the track buffer ranges for the current track buffer.
+      let trackRanges = trackBuffer.trackBufferRanges;
+      // 4.2. If readyState is "ended", then set the end time on the last range in track ranges to highest end time.
+      if (this.#parent.readyState === "ended" && trackRanges.length > 0) {
+        trackRanges = trackRanges.union(
+          new TimeRanges([
+            [trackRanges.end(trackRanges.length - 1), highestEndTime],
+          ])
+        );
+      }
+      // 4.3. Let new intersection ranges equal the intersection between the intersection ranges and the track ranges.
+      // 4.4. Replace the ranges in intersection ranges with the new intersection ranges.
+      intersectionRanges = intersectionRanges.intersect(trackRanges);
+    }
+    return intersectionRanges;
   }
 
   appendBuffer(data: BufferSource): void {

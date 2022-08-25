@@ -42,6 +42,9 @@ export abstract class TrackBuffer {
     // 16. Add the coded frame with the presentation timestamp, decode timestamp,
     //     and frame duration to the track buffer.
     this.samples.push(sample);
+    this.trackBufferRanges = this.trackBufferRanges.union(
+      new TimeRanges([[pts, frameEndTimestamp]])
+    );
     // 17. Set last decode timestamp for track buffer to decode timestamp.
     this.lastDecodeTimestamp = dts;
     // 18. Set last frame duration for track buffer to frame duration.
