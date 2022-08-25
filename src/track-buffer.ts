@@ -60,10 +60,15 @@ export abstract class TrackBuffer {
   }
 
   protected abstract addSampleInternal(sample: Sample): void;
+
+  abstract findSampleForTime(time: number): Sample | undefined;
+
+  abstract findSyncForSample(sample: Sample): Sample | undefined;
 }
 
 export class AudioTrackBuffer extends TrackBuffer {
   declare codecConfig: AudioDecoderConfig;
+  #samples: Sample[] = [];
 
   constructor(trackId: number, codecConfig: AudioDecoderConfig) {
     super(trackId, codecConfig);
@@ -71,6 +76,14 @@ export class AudioTrackBuffer extends TrackBuffer {
 
   protected addSampleInternal(sample: Sample): void {
     this.#samples.push(sample);
+  }
+
+  findSampleForTime(time: number): Sample | undefined {
+    return findSampleForTime(this.#samples, time);
+  }
+
+  findSyncForSample(sample: Sample): Sample | undefined {
+    return sample;
   }
 }
 
@@ -110,4 +123,29 @@ export class VideoTrackBuffer extends TrackBuffer {
       this.#currentGop.samples.push(sample);
     }
   }
+
+  findSampleForTime(time: number): Sample | undefined {
+    const containingGop = this.#gops.find((gop) => {
+      return gop.start <= time && time < gop.end;
+    });
+    return containingGop && findSampleForTime(containingGop.samples, time);
+  }
+
+  findSyncForSample(sample: Sample): Sample | undefined {
+    const containingGop = this.#gops.find((gop) => {
+      return gop.samples.includes(sample);
+    });
+    return containingGop?.samples[0];
+  }
+}
+
+function findSampleForTime(
+  samples: readonly Sample[],
+  time: number
+): Sample | undefined {
+  return samples.find((sample) => {
+    const start = sample.cts / sample.timescale;
+    const end = (sample.cts + sample.duration) / sample.timescale;
+    return start <= time && time < end;
+  });
 }
