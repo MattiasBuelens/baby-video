@@ -9,7 +9,6 @@ export abstract class TrackBuffer {
   highestEndTimestamp: number | undefined = undefined;
   needRandomAccessPoint: boolean = true;
   trackBufferRanges: TimeRanges = new TimeRanges([]);
-  samples: Sample[] = [];
 
   protected constructor(
     trackId: number,
@@ -41,7 +40,7 @@ export abstract class TrackBuffer {
     const frameEndTimestamp = (sample.cts + sample.duration) / sample.timescale;
     // 16. Add the coded frame with the presentation timestamp, decode timestamp,
     //     and frame duration to the track buffer.
-    this.samples.push(sample);
+    this.addSampleInternal(sample);
     this.trackBufferRanges = this.trackBufferRanges.union(
       new TimeRanges([[pts, frameEndTimestamp]])
     );
@@ -59,6 +58,8 @@ export abstract class TrackBuffer {
       this.highestEndTimestamp = frameEndTimestamp;
     }
   }
+
+  protected abstract addSampleInternal(sample: Sample): void;
 }
 
 export class AudioTrackBuffer extends TrackBuffer {
@@ -67,12 +68,46 @@ export class AudioTrackBuffer extends TrackBuffer {
   constructor(trackId: number, codecConfig: AudioDecoderConfig) {
     super(trackId, codecConfig);
   }
+
+  protected addSampleInternal(sample: Sample): void {
+    this.#samples.push(sample);
+  }
+}
+
+interface GroupOfPictures {
+  start: number;
+  end: number;
+  samples: Sample[];
 }
 
 export class VideoTrackBuffer extends TrackBuffer {
   declare codecConfig: VideoDecoderConfig;
+  #gops: GroupOfPictures[] = [];
+  #currentGop: GroupOfPictures | undefined = undefined;
 
   constructor(trackId: number, codecConfig: VideoDecoderConfig) {
     super(trackId, codecConfig);
+  }
+
+  requireRandomAccessPoint(): void {
+    super.requireRandomAccessPoint();
+    this.#currentGop = undefined;
+  }
+
+  protected addSampleInternal(sample: Sample): void {
+    if (this.#currentGop === undefined || sample.is_sync) {
+      this.#currentGop = {
+        start: sample.cts / sample.timescale,
+        end: (sample.cts + sample.duration) / sample.timescale,
+        samples: [sample],
+      };
+      this.#gops.push(this.#currentGop);
+    } else {
+      this.#currentGop.end = Math.max(
+        this.#currentGop.end,
+        (sample.cts + sample.duration) / sample.timescale
+      );
+      this.#currentGop.samples.push(sample);
+    }
   }
 }
