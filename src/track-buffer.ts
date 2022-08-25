@@ -38,7 +38,7 @@ export abstract class TrackBuffer {
     //    of the coded frame's duration in seconds.
     const frameDuration = sample.duration / sample.timescale;
     // 7. Let frame end timestamp equal the sum of presentation timestamp and frame duration.
-    const frameEndTimestamp = pts + frameDuration;
+    const frameEndTimestamp = (sample.cts + sample.duration) / sample.timescale;
     // 16. Add the coded frame with the presentation timestamp, decode timestamp,
     //     and frame duration to the track buffer.
     this.samples.push(sample);
