@@ -373,9 +373,6 @@ export class BabySourceBuffer extends EventTarget {
     // 1. For each coded frame in the media segment run the following steps:
     for (let i = 0; i < samples.length; i++) {
       const sample = samples[i];
-      // 1.1. Let presentation timestamp be a double precision floating point representation
-      //      of the coded frame's presentation timestamp in seconds.
-      const pts = sample.cts / sample.timescale;
       // 1.2. Let decode timestamp be a double precision floating point representation
       //      of the coded frame's decode timestamp in seconds.
       const dts = sample.dts / sample.timescale;
