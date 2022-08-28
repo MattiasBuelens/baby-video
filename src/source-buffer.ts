@@ -11,7 +11,12 @@ import {
   VideoTrackInfo,
 } from "mp4box";
 import type { BabyMediaSource } from "./media-source";
-import { durationChange, endOfStream, getMediaElement } from "./media-source";
+import {
+  durationChange,
+  endOfStream,
+  getMediaElement,
+  openIfEnded,
+} from "./media-source";
 import {
   AudioTrackBuffer,
   TrackBuffer,
@@ -116,7 +121,11 @@ export class BabySourceBuffer extends EventTarget {
         "InvalidStateError"
       );
     }
-    // TODO Steps 3 to 7
+    // TODO Steps 3 to 4
+    // 5. If the readyState attribute of the parent media source is in the "ended" state
+    //    then run the following steps...
+    openIfEnded(this.#parent);
+    // TODO Steps 6 to 7
   }
 
   async #bufferAppend(): Promise<void> {

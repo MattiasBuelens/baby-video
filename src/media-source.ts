@@ -20,6 +20,7 @@ export let endOfStream: (
 export let getMediaElement: (
   mediaSource: BabyMediaSource
 ) => BabyVideoElement | undefined;
+export let openIfEnded: (mediaSource: BabyMediaSource) => void;
 
 export class BabyMediaSource extends EventTarget {
   #duration: number = NaN;
@@ -176,6 +177,17 @@ export class BabyMediaSource extends EventTarget {
     }
   }
 
+  #openIfEnded() {
+    // If the readyState attribute of the parent media source is in the "ended" state
+    // then run the following steps:
+    if (this.#readyState === "ended") {
+      // Set the readyState attribute of the parent media source to "open"
+      this.#readyState = "open";
+      // Queue a task to fire an event named sourceopen at the parent media source.
+      this.dispatchEvent(new Event("sourceopen"));
+    }
+  }
+
   static {
     attachToMediaElement = (mediaSource, mediaElement) =>
       mediaSource.#attachToMediaElement(mediaElement);
@@ -185,5 +197,6 @@ export class BabyMediaSource extends EventTarget {
       mediaSource.#durationChange(newDuration);
     endOfStream = (mediaSource, error) => mediaSource.#endOfStream(error);
     getMediaElement = (mediaSource) => mediaSource.#mediaElement;
+    openIfEnded = (mediaSource) => mediaSource.#openIfEnded();
   }
 }
