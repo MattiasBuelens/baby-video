@@ -1,6 +1,7 @@
 import { BabySourceBuffer } from "./source-buffer";
 import { BabyVideoElement, updateDuration } from "./video-element";
 import { queueTask } from "./util";
+import { setEndTimeOnLastRange, TimeRanges } from "./time-ranges";
 
 export type MediaSourceReadyState = "closed" | "ended" | "open";
 
@@ -20,6 +21,7 @@ export let endOfStream: (
 export let getMediaElement: (
   mediaSource: BabyMediaSource
 ) => BabyVideoElement | undefined;
+export let getBuffered: (mediaSource: BabyMediaSource) => TimeRanges;
 export let openIfEnded: (mediaSource: BabyMediaSource) => void;
 
 export class BabyMediaSource extends EventTarget {
@@ -188,6 +190,35 @@ export class BabyMediaSource extends EventTarget {
     }
   }
 
+  #getBuffered(): TimeRanges {
+    // https://w3c.github.io/media-source/#htmlmediaelement-extensions-buffered
+    // 2.1. Let recent intersection ranges equal an empty TimeRanges object.
+    let intersectionRanges = new TimeRanges([]);
+    // 2.2. If activeSourceBuffers.length does not equal 0 then run the following steps:
+    if (this.#sourceBuffers.length !== 0) {
+      // 2.2.1. Let active ranges be the ranges returned by buffered for each SourceBuffer object in activeSourceBuffers.
+      const activeRanges = this.#sourceBuffers.map(
+        (sourceBuffer) => sourceBuffer.buffered
+      );
+      // 2.2.2. Let highest end time be the largest range end time in the active ranges.
+      const highestEndTime = Math.max(...activeRanges.map(getHighestEndTime));
+      // 2.2.3. Let recent intersection ranges equal a TimeRanges object containing a single range from 0 to highest end time.
+      intersectionRanges = new TimeRanges([[0, highestEndTime]]);
+      // 2.2.4. For each SourceBuffer object in activeSourceBuffers run the following steps:
+      // 2.2.4.1. Let source ranges equal the ranges returned by the buffered attribute on the current SourceBuffer.
+      for (let sourceRanges of activeRanges) {
+        // 2.2.4.2. If readyState is "ended", then set the end time on the last range in source ranges to highest end time.
+        if (this.#readyState === "ended") {
+          sourceRanges = setEndTimeOnLastRange(sourceRanges, highestEndTime);
+        }
+        // 2.2.4.3. Let new intersection ranges equal the intersection between the recent intersection ranges and the source ranges.
+        // 2.2.4.4. Replace the ranges in recent intersection ranges with the new intersection ranges.
+        intersectionRanges = intersectionRanges.intersect(sourceRanges);
+      }
+    }
+    return intersectionRanges;
+  }
+
   static {
     attachToMediaElement = (mediaSource, mediaElement) =>
       mediaSource.#attachToMediaElement(mediaElement);
@@ -197,6 +228,11 @@ export class BabyMediaSource extends EventTarget {
       mediaSource.#durationChange(newDuration);
     endOfStream = (mediaSource, error) => mediaSource.#endOfStream(error);
     getMediaElement = (mediaSource) => mediaSource.#mediaElement;
+    getBuffered = (mediaSource) => mediaSource.#getBuffered();
     openIfEnded = (mediaSource) => mediaSource.#openIfEnded();
   }
+}
+
+function getHighestEndTime(buffered: TimeRanges): number {
+  return buffered.length > 0 ? buffered.end(buffered.length - 1) : 0;
 }

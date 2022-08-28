@@ -3,8 +3,10 @@ import {
   attachToMediaElement,
   BabyMediaSource,
   detachFromMediaElement,
+  getBuffered,
 } from "./media-source";
 import { queueTask } from "./util";
+import { TimeRanges } from "./time-ranges";
 
 const template = document.createElement("template");
 template.innerHTML = `<style>${stylesheet}</style>`;
@@ -63,6 +65,10 @@ export class BabyVideoElement extends HTMLElement {
       delete this[prop];
       this[prop] = value;
     }
+  }
+
+  get buffered(): TimeRanges {
+    return this.#srcObject ? getBuffered(this.#srcObject) : new TimeRanges([]);
   }
 
   get currentTime(): number {

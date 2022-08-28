@@ -19,6 +19,27 @@ export class TimeRanges {
     return this.#ranges[index][1];
   }
 
+  indexOf(time: number): number {
+    for (const [index, [start, end]] of this.#ranges.entries()) {
+      if (start > time) {
+        break;
+      } else if (time <= end) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  contains(time: number): boolean {
+    return this.indexOf(time) >= 0;
+  }
+
+  containsRange(rangeStart: number, rangeEnd: number): boolean {
+    return this.#ranges.some(
+      ([start, end]) => start <= rangeStart && rangeEnd <= end
+    );
+  }
+
   intersect(other: TimeRanges): TimeRanges {
     // Based on TimeRanges::intersection from Mozilla Firefox
     // https://hg.mozilla.org/releases/mozilla-release/file/bd079aadd3fe/dom/html/TimeRanges.cpp#l137

@@ -332,12 +332,25 @@ export class BabySourceBuffer extends EventTarget {
     // 2. If the HTMLMediaElement.readyState attribute is HAVE_METADATA and the new coded frames
     //    cause HTMLMediaElement.buffered to have a TimeRanges for the current playback position,
     //    then set the HTMLMediaElement.readyState attribute to HAVE_CURRENT_DATA.
-    // TODO
+    const mediaElement = getMediaElement(this.#parent)!;
+    const buffered = mediaElement.buffered;
+    const currentTime = mediaElement.currentTime;
+    if (
+      mediaElement.readyState === MediaReadyState.HAVE_METADATA &&
+      buffered.contains(currentTime)
+    ) {
+      updateReadyState(mediaElement, MediaReadyState.HAVE_CURRENT_DATA);
+    }
     // 3. If the HTMLMediaElement.readyState attribute is HAVE_CURRENT_DATA and the new coded frames
     //    cause HTMLMediaElement.buffered to have a TimeRanges that includes the current playback position
     //    and some time beyond the current playback position, then set the HTMLMediaElement.readyState
     //    attribute to HAVE_FUTURE_DATA.
-    // TODO
+    if (
+      mediaElement.readyState === MediaReadyState.HAVE_METADATA &&
+      buffered.containsRange(currentTime, currentTime + 0.1)
+    ) {
+      updateReadyState(mediaElement, MediaReadyState.HAVE_FUTURE_DATA);
+    }
     // 4. If the HTMLMediaElement.readyState attribute is HAVE_FUTURE_DATA and the new coded frames
     //    cause HTMLMediaElement.buffered to have a TimeRanges that includes the current playback position
     //    and enough data to ensure uninterrupted playback, then set the HTMLMediaElement.readyState
