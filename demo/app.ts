@@ -9,8 +9,10 @@ if (mediaSource.readyState !== "open") {
 
 const sourceBuffer = mediaSource.addSourceBuffer(`video/mp4`);
 const segmentURLs = [
-  "https://amssamples.streaming.mediaservices.windows.net/bb34a723-f69a-4231-afba-dc850f9e3da8/ChildOfThe90s.ism/QualityLevels(5944615)/Fragments(video=i,format=mpd-time-csf)",
-  "https://amssamples.streaming.mediaservices.windows.net/bb34a723-f69a-4231-afba-dc850f9e3da8/ChildOfThe90s.ism/QualityLevels(5944615)/Fragments(video=0,format=mpd-time-csf)",
+  "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps_1920x1080_8000k/bbb_30fps_1920x1080_8000k_0.m4v",
+  "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps_1920x1080_8000k/bbb_30fps_1920x1080_8000k_1.m4v",
+  "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps_1920x1080_8000k/bbb_30fps_1920x1080_8000k_2.m4v",
+  "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps_1920x1080_8000k/bbb_30fps_1920x1080_8000k_3.m4v"
 ];
 for (const segmentURL of segmentURLs) {
   const segmentData = await (await fetch(segmentURL)).arrayBuffer();
