@@ -172,7 +172,6 @@ export class BabySourceBuffer extends EventTarget {
 
   async #parseBox(boxType: string, boxData: ArrayBuffer): Promise<void> {
     // https://w3c.github.io/media-source/#sourcebuffer-segment-parser-loop
-    console.log(boxType, boxData);
     if (boxType === "ftyp") {
       // 5.2. Run the initialization segment received algorithm.
       this.#isoFile = createFile();
@@ -403,7 +402,6 @@ export class BabySourceBuffer extends EventTarget {
       // TODO 11 to 15 Remove overlapping frames
       // Steps 16 to 19
       trackBuffer.addSample(sample);
-      console.log({ pts, dts });
     }
   }
 
