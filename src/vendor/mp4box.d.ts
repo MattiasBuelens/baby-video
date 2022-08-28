@@ -7,11 +7,26 @@ declare module "mp4box" {
     seek(position: number): void;
   }
 
+  export class DataStream {
+    static BIG_ENDIAN = false;
+    static LITTLE_ENDIAN = true;
+
+    constructor(
+      arrayBuffer: ArrayBuffer | undefined,
+      byteOffset: number,
+      endianness: boolean
+    );
+
+    readonly buffer: ArrayBuffer;
+  }
+
   export interface Box {
     type: string;
     size: number;
     hdr_size: number;
     start: number;
+
+    write(stream: DataStream): void;
   }
 
   export enum BoxParser {
@@ -68,6 +83,8 @@ declare module "mp4box" {
     appendBuffer(ab: MP4ArrayBuffer): void;
 
     getInfo(): Info;
+
+    getTrackById(trackId: number): TrakBox;
 
     setExtractionOptions(
       trackId: number,
@@ -132,6 +149,40 @@ declare module "mp4box" {
       width: number;
       height: number;
     };
+  }
+
+  export interface TrakBox extends Box {
+    type: "trak";
+    mdia: MdiaBox;
+  }
+
+  export interface MdiaBox extends Box {
+    type: "mdia";
+    minf: MinfBox;
+  }
+
+  export interface MinfBox extends Box {
+    type: "minf";
+    stbl: StblBox;
+  }
+
+  export interface StblBox extends Box {
+    type: "stbl";
+    stsd: StsdBox;
+  }
+
+  export interface StsdBox extends Box {
+    type: "stsd";
+    entries: Box[];
+  }
+
+  export interface AvcBox extends Box {
+    type: "avc1";
+    avcC: AvccBox;
+  }
+
+  export interface AvccBox extends Box {
+    type: "avcC";
   }
 
   export interface ExtractionOptions {

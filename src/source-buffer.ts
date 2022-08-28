@@ -1,13 +1,17 @@
 import { concatUint8Arrays, queueTask, toUint8Array } from "./util";
 import {
   AudioTrackInfo,
+  AvcBox,
+  Box,
   BoxParser,
   createFile,
+  DataStream,
   Info,
   ISOFile,
   MP4ArrayBuffer,
   MP4BoxStream,
   Sample,
+  TrakBox,
   VideoTrackInfo,
 } from "mp4box";
 import type { BabyMediaSource } from "./media-source";
@@ -241,7 +245,9 @@ export class BabySourceBuffer extends EventTarget {
       //      the user agent does not support, then run the append error
       //      algorithm and abort these steps.
       const audioTrackConfigs = info.audioTracks.map(buildAudioConfig);
-      const videoTrackConfigs = info.videoTracks.map(buildVideoConfig);
+      const videoTrackConfigs = info.videoTracks.map((trackInfo) =>
+        buildVideoConfig(trackInfo, this.#isoFile!.getTrackById(trackInfo.id))
+      );
       for (const audioTrackConfig of audioTrackConfigs) {
         if (!(await AudioDecoder.isConfigSupported(audioTrackConfig))) {
           this.#appendError();
@@ -441,10 +447,31 @@ function buildAudioConfig(info: AudioTrackInfo): AudioDecoderConfig {
   };
 }
 
-function buildVideoConfig(info: VideoTrackInfo): VideoDecoderConfig {
+function buildVideoConfig(
+  info: VideoTrackInfo,
+  trak: TrakBox
+): VideoDecoderConfig {
   return {
     codec: info.codec,
     codedWidth: info.video.width,
     codedHeight: info.video.height,
+    description: createAvcDecoderConfigurationRecord(trak),
   };
+}
+
+function isAvcEntry(entry: Box): entry is AvcBox {
+  return (entry as AvcBox).avcC !== undefined;
+}
+
+function createAvcDecoderConfigurationRecord(
+  trak: TrakBox
+): Uint8Array | undefined {
+  // https://www.w3.org/TR/webcodecs-avc-codec-registration/#videodecoderconfig-description
+  const avcC = trak.mdia.minf.stbl.stsd.entries.find(isAvcEntry)?.avcC;
+  if (!avcC) {
+    return undefined;
+  }
+  const stream = new DataStream(undefined, 0, DataStream.BIG_ENDIAN);
+  avcC.write(stream);
+  return new Uint8Array(stream.buffer, 8); // remove the box header
 }
