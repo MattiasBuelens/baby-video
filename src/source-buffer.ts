@@ -29,6 +29,10 @@ import {
 import { MediaReadyState, updateReadyState } from "./video-element";
 import { setEndTimeOnLastRange, TimeRanges } from "./time-ranges";
 
+export let getVideoTrackBuffer: (
+  sourceBuffer: BabySourceBuffer
+) => VideoTrackBuffer | undefined;
+
 export class BabySourceBuffer extends EventTarget {
   readonly #parent: BabyMediaSource;
   #inputBuffer: Uint8Array = new Uint8Array(0);
@@ -439,6 +443,17 @@ export class BabySourceBuffer extends EventTarget {
     queueTask(() => this.dispatchEvent(new Event("updateend")));
     // 5. Run the end of stream algorithm with the error parameter set to "decode".
     endOfStream(this.#parent, "decode");
+  }
+
+  #getVideoTrackBuffer(): VideoTrackBuffer | undefined {
+    return this.#trackBuffers.find(
+      (trackBuffer): trackBuffer is VideoTrackBuffer =>
+        trackBuffer instanceof VideoTrackBuffer
+    );
+  }
+
+  static {
+    getVideoTrackBuffer = (sourceBuffer) => sourceBuffer.#getVideoTrackBuffer();
   }
 }
 
