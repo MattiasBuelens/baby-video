@@ -66,7 +66,10 @@ export abstract class TrackBuffer {
 
   abstract findSampleForTime(time: number): Sample | undefined;
 
-  abstract findSyncForSample(sample: Sample): Sample | undefined;
+  abstract getDecodeQueueForSample(
+    sample: Sample,
+    lastDecodedSample: Sample | undefined
+  ): Sample[];
 }
 
 export class AudioTrackBuffer extends TrackBuffer {
@@ -85,8 +88,11 @@ export class AudioTrackBuffer extends TrackBuffer {
     return findSampleForTime(this.#samples, time);
   }
 
-  findSyncForSample(sample: Sample): Sample | undefined {
-    return sample;
+  getDecodeQueueForSample(
+    sample: Sample,
+    _lastDecodedSample: Sample | undefined
+  ): Sample[] {
+    return [sample];
   }
 }
 
@@ -134,11 +140,27 @@ export class VideoTrackBuffer extends TrackBuffer {
     return containingGop && findSampleForTime(containingGop.samples, time);
   }
 
-  findSyncForSample(sample: Sample): Sample | undefined {
+  getDecodeQueueForSample(
+    sample: Sample,
+    lastDecodedSample: Sample | undefined
+  ): Sample[] {
     const containingGop = this.#gops.find((gop) => {
       return gop.samples.includes(sample);
-    });
-    return containingGop?.samples[0];
+    })!;
+    // By default, decode from the first sample in the GOP (i.e. the sync sample)
+    // up to (and including) the requested sample.
+    let startIndex = 0;
+    let endIndex = containingGop.samples.indexOf(sample);
+    if (lastDecodedSample !== undefined) {
+      const lastDecodedSampleIndex =
+        containingGop.samples.indexOf(lastDecodedSample);
+      // If last decoded sample is inside same GOP and precedes the requested sample,
+      // decode starting from the last decode sample.
+      if (lastDecodedSampleIndex >= 0 && lastDecodedSampleIndex < endIndex) {
+        startIndex = lastDecodedSampleIndex + 1;
+      }
+    }
+    return containingGop.samples.slice(startIndex, endIndex + 1);
   }
 }
 

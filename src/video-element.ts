@@ -128,17 +128,23 @@ export class BabyVideoElement extends HTMLElement {
     if (this.#videoDecoder.state === "unconfigured") {
       this.#videoDecoder.configure(videoTrackBuffer.codecConfig);
     }
-    const sample = videoTrackBuffer.findSampleForTime(this.currentTime);
-    if (sample && this.#lastDecodedVideoSample !== sample) {
-      this.#videoDecoder.decode(
-        new EncodedVideoChunk({
-          type: sample.is_sync ? "key" : "delta",
-          timestamp: (1e6 * sample.cts) / sample.timescale,
-          duration: (1e6 * sample.duration) / sample.timescale,
-          data: sample.data,
-        })
+    const sampleAtTime = videoTrackBuffer.findSampleForTime(this.currentTime);
+    if (sampleAtTime && this.#lastDecodedVideoSample !== sampleAtTime) {
+      const decodeQueue = videoTrackBuffer.getDecodeQueueForSample(
+        sampleAtTime,
+        this.#lastDecodedVideoSample
       );
-      this.#lastDecodedVideoSample = sample;
+      for (const sample of decodeQueue) {
+        this.#videoDecoder.decode(
+          new EncodedVideoChunk({
+            type: sample.is_sync ? "key" : "delta",
+            timestamp: (1e6 * sample.cts) / sample.timescale,
+            duration: (1e6 * sample.duration) / sample.timescale,
+            data: sample.data,
+          })
+        );
+        this.#lastDecodedVideoSample = sample;
+      }
     }
   }
 
