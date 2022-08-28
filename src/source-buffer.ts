@@ -27,7 +27,7 @@ import {
   VideoTrackBuffer,
 } from "./track-buffer";
 import { MediaReadyState, updateReadyState } from "./video-element";
-import { TimeRanges } from "./time-ranges";
+import { setEndTimeOnLastRange, TimeRanges } from "./time-ranges";
 
 export class BabySourceBuffer extends EventTarget {
   readonly #parent: BabyMediaSource;
@@ -79,12 +79,8 @@ export class BabySourceBuffer extends EventTarget {
       // 4.1. Let track ranges equal the track buffer ranges for the current track buffer.
       let trackRanges = trackBuffer.trackBufferRanges;
       // 4.2. If readyState is "ended", then set the end time on the last range in track ranges to highest end time.
-      if (this.#parent.readyState === "ended" && trackRanges.length > 0) {
-        trackRanges = trackRanges.union(
-          new TimeRanges([
-            [trackRanges.end(trackRanges.length - 1), highestEndTime],
-          ])
-        );
+      if (this.#parent.readyState === "ended") {
+        trackRanges = setEndTimeOnLastRange(trackRanges, highestEndTime);
       }
       // 4.3. Let new intersection ranges equal the intersection between the intersection ranges and the track ranges.
       // 4.4. Replace the ranges in intersection ranges with the new intersection ranges.

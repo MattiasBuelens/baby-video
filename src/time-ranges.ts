@@ -111,3 +111,15 @@ export class TimeRanges {
     return new TimeRanges(ranges);
   }
 }
+
+export function setEndTimeOnLastRange(
+  timeRanges: TimeRanges,
+  newEndTime: number
+): TimeRanges {
+  if (timeRanges.length === 0) {
+    return timeRanges;
+  }
+  return timeRanges.union(
+    new TimeRanges([[timeRanges.end(timeRanges.length - 1), newEndTime]])
+  );
+}
