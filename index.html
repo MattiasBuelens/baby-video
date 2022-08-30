@@ -4,10 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Baby's first HTML5 &lt;video&gt; element</title>
+    <script type="module" src="https://unpkg.com/media-chrome@0.10.0"></script>
     <script type="module" src="./src/index.ts"></script>
     <script type="module" src="./demo/app.ts"></script>
   </head>
   <body>
-    <baby-video style="min-width: 300px"></baby-video>
+    <media-controller style="min-width: 300px">
+      <baby-video slot="media"></baby-video>
+      <media-control-bar>
+        <media-play-button></media-play-button>
+        <media-time-range></media-time-range>
+        <media-fullscreen-button></media-fullscreen-button>
+      </media-control-bar>
+    </media-controller>
   </body>
 </html>
