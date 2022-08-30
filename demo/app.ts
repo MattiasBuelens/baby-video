@@ -14,19 +14,21 @@ video.addEventListener("timeupdate", logEvent);
 video.addEventListener("durationchange", logEvent);
 video.addEventListener("seeking", logEvent);
 video.addEventListener("seeked", logEvent);
+video.addEventListener("progress", logEvent);
 
 const mediaSource = new BabyMediaSource();
 video.srcObject = mediaSource;
 if (mediaSource.readyState !== "open") {
   await waitForEvent(mediaSource, "sourceopen");
 }
-
+mediaSource.duration = 60;
 const sourceBuffer = mediaSource.addSourceBuffer(`video/mp4`);
 const segmentURLs = [
   "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps_1920x1080_8000k/bbb_30fps_1920x1080_8000k_0.m4v",
   "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps_1920x1080_8000k/bbb_30fps_1920x1080_8000k_1.m4v",
   "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps_1920x1080_8000k/bbb_30fps_1920x1080_8000k_2.m4v",
-  "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps_1920x1080_8000k/bbb_30fps_1920x1080_8000k_3.m4v"
+  "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps_1920x1080_8000k/bbb_30fps_1920x1080_8000k_3.m4v",
+  "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps_1920x1080_8000k/bbb_30fps_1920x1080_8000k_4.m4v",
 ];
 for (const segmentURL of segmentURLs) {
   const segmentData = await (await fetch(segmentURL)).arrayBuffer();
