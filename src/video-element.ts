@@ -64,9 +64,9 @@ export class BabyVideoElement extends HTMLElement {
     shadow.appendChild(template.content.cloneNode(true));
 
     this.#canvas = document.createElement("canvas");
-    this.#canvas.width = 1920;
-    this.#canvas.height = 1080;
-    this.#canvas.style.width = "100%";
+    // The default object size is a width of 300 CSS pixels and a height of 150 CSS pixels.
+    this.#canvas.width = 300;
+    this.#canvas.height = 150;
     shadow.appendChild(this.#canvas);
 
     this.#canvasContext = this.#canvas.getContext("2d")!;
