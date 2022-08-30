@@ -1,6 +1,12 @@
 import { BabyMediaSource, BabyVideoElement } from "../src/index";
 
 const video = document.querySelector<BabyVideoElement>("baby-video")!;
+video.addEventListener("play", logEvent);
+video.addEventListener("pause", logEvent);
+video.addEventListener("playing", logEvent);
+video.addEventListener("timeupdate", logEvent);
+video.addEventListener("waiting", logEvent);
+
 const mediaSource = new BabyMediaSource();
 video.srcObject = mediaSource;
 if (mediaSource.readyState !== "open") {
@@ -24,4 +30,8 @@ function waitForEvent(target: EventTarget, type: string): Promise<Event> {
   return new Promise((resolve) => {
     target.addEventListener(type, resolve, { once: true });
   });
+}
+
+function logEvent(event: Event) {
+  console.log(`${event.type} @ ${video.currentTime}`);
 }
