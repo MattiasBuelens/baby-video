@@ -354,7 +354,7 @@ export class BabySourceBuffer extends EventTarget {
     //    and some time beyond the current playback position, then set the HTMLMediaElement.readyState
     //    attribute to HAVE_FUTURE_DATA.
     if (
-      mediaElement.readyState === MediaReadyState.HAVE_METADATA &&
+      mediaElement.readyState === MediaReadyState.HAVE_CURRENT_DATA &&
       buffered.containsRange(currentTime, currentTime + 0.1)
     ) {
       updateReadyState(mediaElement, MediaReadyState.HAVE_FUTURE_DATA);
