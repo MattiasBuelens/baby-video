@@ -165,7 +165,7 @@ export class BabyMediaSource extends EventTarget {
     this.#duration = newDuration;
     // 6.1. Update the media element's duration to new duration.
     // 6.1. Run the HTMLMediaElement duration change algorithm.
-    updateDuration(this.#mediaElement!);
+    updateDuration(this.#mediaElement!, newDuration);
   }
 
   #endOfStream(error?: "network" | "decode") {

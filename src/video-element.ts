@@ -22,7 +22,10 @@ export enum MediaReadyState {
   HAVE_ENOUGH_DATA,
 }
 
-export let updateDuration: (videoElement: BabyVideoElement) => void;
+export let updateDuration: (
+  videoElement: BabyVideoElement,
+  newDuration: number
+) => void;
 export let updateReadyState: (
   videoElement: BabyVideoElement,
   newReadyState: MediaReadyState
@@ -33,6 +36,7 @@ export class BabyVideoElement extends HTMLElement {
   readonly #canvasContext: CanvasRenderingContext2D;
 
   #currentTime: number = 0;
+  #duration: number = NaN;
   #ended: boolean = false;
   #paused: boolean = true;
   #readyState: MediaReadyState = 0;
@@ -110,10 +114,7 @@ export class BabyVideoElement extends HTMLElement {
   }
 
   get duration(): number {
-    if (!this.#srcObject) {
-      return NaN;
-    }
-    return this.#srcObject.duration;
+    return this.#duration;
   }
 
   get ended(): boolean {
@@ -320,7 +321,7 @@ export class BabyVideoElement extends HTMLElement {
     // 6. If the new playback position is later than the end of the media resource,
     //    then let it be the end of the media resource instead.
     const duration = this.duration;
-    if (!isNaN(duration) && newPosition > duration) {
+    if (!Number.isNaN(duration) && newPosition > duration) {
       newPosition = this.duration;
     }
     // 7. If the new playback position is less than the earliest possible position, let it be that position instead.
@@ -427,6 +428,27 @@ export class BabyVideoElement extends HTMLElement {
     return this.#readyState <= MediaReadyState.HAVE_CURRENT_DATA;
   }
 
+  #updateDuration(newDuration: number): void {
+    // https://html.spec.whatwg.org/multipage/media.html#dom-media-duration
+    const oldDuration = this.#duration;
+    this.#duration = newDuration;
+    // When the length of the media resource changes to a known value
+    // (e.g. from being unknown to known, or from a previously established length to a new length)
+    // the user agent must queue a media element task given the media element to fire an event named durationchange at the media element.
+    if (
+      (Number.isNaN(oldDuration) && !Number.isNaN(newDuration)) ||
+      oldDuration !== newDuration
+    ) {
+      queueTask(() => this.dispatchEvent(new Event("durationchange")));
+    }
+    // If the duration is changed such that the current playback position ends up being greater than
+    // the time of the end of the media resource, then the user agent must also seek to
+    // the time of the end of the media resource.
+    if (this.currentTime > newDuration) {
+      this.#seek(newDuration);
+    }
+  }
+
   #updateReadyState(newReadyState: MediaReadyState): void {
     const wasPotentiallyPlaying = this.#isPotentiallyPlaying();
     const previousReadyState = this.#readyState;
@@ -493,12 +515,8 @@ export class BabyVideoElement extends HTMLElement {
   }
 
   static {
-    updateDuration = (videoElement: BabyVideoElement) => {
-      queueTask(() => videoElement.dispatchEvent(new Event("durationchange")));
-      const newDuration = videoElement.duration;
-      if (videoElement.currentTime > newDuration) {
-        videoElement.#seek(newDuration);
-      }
+    updateDuration = (videoElement: BabyVideoElement, newDuration: number) => {
+      videoElement.#updateDuration(newDuration);
     };
     updateReadyState = (
       videoElement: BabyVideoElement,
