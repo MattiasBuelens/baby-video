@@ -1,3 +1,4 @@
+import "media-chrome";
 import { BabyMediaSource, BabyVideoElement } from "../src/index";
 
 const video = document.querySelector<BabyVideoElement>("baby-video")!;
