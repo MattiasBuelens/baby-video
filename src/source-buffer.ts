@@ -327,6 +327,10 @@ export class BabySourceBuffer extends EventTarget {
     // 1. For each coded frame in the media segment run the following steps:
     for (const trackBuffer of this.#trackBuffers) {
       this.#isoFile!.setExtractionOptions(trackBuffer.trackId, undefined, {});
+      // HACK: Do not use decode timestamp from previous sample when parsing a new movie fragment.
+      // See https://github.com/gpac/mp4box.js/blob/v0.5.2/src/isofile-sample-processing.js#L422
+      this.#isoFile!.getTrackById(trackBuffer.trackId).first_traf_merged =
+        false;
     }
     this.#isoFile!.onSamples = (trackId, _user, samples) =>
       this.#processSamples(trackId, samples);
