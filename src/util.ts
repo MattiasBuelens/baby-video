@@ -22,6 +22,24 @@ export function queueTask(fn: () => void): void {
   setTimeout(fn, 0);
 }
 
+export function waitForEvent(
+  target: EventTarget,
+  type: string,
+  signal?: AbortSignal
+): Promise<Event> {
+  return new Promise((resolve, reject) => {
+    const listener = (event: Event) => {
+      signal?.removeEventListener("abort", abortListener);
+      resolve(event);
+    };
+    const abortListener = () => {
+      reject(signal!.reason);
+    };
+    target.addEventListener(type, listener, { once: true, signal });
+    signal?.addEventListener("abort", abortListener);
+  });
+}
+
 export class Deferred<T> {
   readonly promise: Promise<T>;
   #resolve?: (value: T) => void;

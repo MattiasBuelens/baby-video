@@ -7,7 +7,7 @@ import {
   getActiveVideoTrackBuffer,
   getBuffered,
 } from "./media-source";
-import { Deferred, queueTask } from "./util";
+import { Deferred, queueTask, waitForEvent } from "./util";
 import { TimeRanges } from "./time-ranges";
 import { Sample } from "mp4box";
 
@@ -36,6 +36,7 @@ export class BabyVideoElement extends HTMLElement {
   #ended: boolean = false;
   #paused: boolean = true;
   #readyState: MediaReadyState = 0;
+  #seeking: boolean = false;
   #srcObject: BabyMediaSource | undefined;
 
   #pendingPlayPromises: Array<Deferred<void>> = [];
@@ -43,6 +44,7 @@ export class BabyVideoElement extends HTMLElement {
   #lastAdvanceTime: number = 0;
   #lastTimeUpdate: number = 0;
   #hasFiredLoadedData: boolean = false;
+  #seekAbortController: AbortController = new AbortController();
 
   readonly #videoDecoder: VideoDecoder;
   #lastDecodedVideoSample: Sample | undefined;
@@ -96,9 +98,15 @@ export class BabyVideoElement extends HTMLElement {
   }
 
   set currentTime(value: number) {
-    this.#updateCurrentTime(value);
-    this.#updatePlaying();
-    this.#timeMarchesOn(false, performance.now());
+    // https://html.spec.whatwg.org/multipage/media.html#dom-media-currenttime
+    // On setting, if the media element's readyState is HAVE_NOTHING,
+    // then it must set the media element's default playback start position to the new value;
+    // otherwise, it must set the official playback position to the new value and then seek to the new value.
+    if (this.#readyState === MediaReadyState.HAVE_NOTHING) {
+      // TODO
+    } else {
+      this.#seek(value);
+    }
   }
 
   get duration(): number {
@@ -118,6 +126,10 @@ export class BabyVideoElement extends HTMLElement {
 
   get readyState(): MediaReadyState {
     return this.#readyState;
+  }
+
+  get seeking(): boolean {
+    return this.#seeking;
   }
 
   get srcObject(): BabyMediaSource | undefined {
@@ -172,7 +184,7 @@ export class BabyVideoElement extends HTMLElement {
     // 2. If the playback has ended and the direction of playback is forwards,
     //    seek to the earliest possible position of the media resource.
     if (this.#ended) {
-      this.currentTime = 0;
+      this.#seek(0);
     }
     if (this.#paused) {
       // 3. If the media element's paused attribute is true, then:
@@ -290,6 +302,60 @@ export class BabyVideoElement extends HTMLElement {
       this.#lastTimeUpdate = now;
       queueTask(() => this.dispatchEvent(new Event("timeupdate")));
     }
+  }
+
+  #seek(newPosition: number): void {
+    // https://html.spec.whatwg.org/multipage/media.html#dom-media-seek
+    // 2. If the media element's readyState is HAVE_NOTHING, return.
+    if (this.#readyState === MediaReadyState.HAVE_NOTHING) {
+      return;
+    }
+    // 3. If the element's seeking IDL attribute is true, then another instance of this algorithm is already running.
+    //    Abort that other instance of the algorithm without waiting for the step that it is running to complete.
+    if (this.#seeking) {
+      this.#seekAbortController.abort();
+    }
+    // 4. Set the seeking IDL attribute to true.
+    this.#seeking = true;
+    // 6. If the new playback position is later than the end of the media resource,
+    //    then let it be the end of the media resource instead.
+    const duration = this.duration;
+    if (!isNaN(duration) && newPosition > duration) {
+      newPosition = this.duration;
+    }
+    // 7. If the new playback position is less than the earliest possible position, let it be that position instead.
+    if (newPosition < 0) {
+      newPosition = 0;
+    }
+    // 10. Queue a media element task given the media element to fire an event named seeking at the element.
+    queueTask(() => this.dispatchEvent(new Event("seeking")));
+    // 11. Set the current playback position to the new playback position.
+    this.#updateCurrentTime(newPosition);
+    this.#updatePlaying();
+    // 12. Wait until the user agent has established whether or not the media data for the new playback position
+    //     is available, and, if it is, until it has decoded enough data to play back that position.
+    this.#seekAbortController = new AbortController();
+    this.#waitForSeekToComplete(this.#seekAbortController.signal).catch(
+      () => {}
+    );
+  }
+
+  async #waitForSeekToComplete(signal: AbortSignal): Promise<void> {
+    // https://html.spec.whatwg.org/multipage/media.html#dom-media-seek
+    // 12. Wait until the user agent has established whether or not the media data for the new playback position
+    //     is available, and, if it is, until it has decoded enough data to play back that position.
+    while (this.#readyState <= MediaReadyState.HAVE_CURRENT_DATA) {
+      await waitForEvent(this, "canplay", signal);
+    }
+    // 13. Await a stable state.
+    // 14. Set the seeking IDL attribute to false.
+    this.#seeking = false;
+    // 15. Run the time marches on steps.
+    this.#timeMarchesOn(false, performance.now());
+    // 16. Queue a media element task given the media element to fire an event named timeupdate at the element.
+    queueTask(() => this.dispatchEvent(new Event("timeupdate")));
+    // 17. Queue a media element task given the media element to fire an event named seeked at the element.
+    queueTask(() => this.dispatchEvent(new Event("seeked")));
   }
 
   #render(): void {
@@ -431,7 +497,7 @@ export class BabyVideoElement extends HTMLElement {
       queueTask(() => videoElement.dispatchEvent(new Event("durationchange")));
       const newDuration = videoElement.duration;
       if (videoElement.currentTime > newDuration) {
-        videoElement.currentTime = newDuration;
+        videoElement.#seek(newDuration);
       }
     };
     updateReadyState = (
