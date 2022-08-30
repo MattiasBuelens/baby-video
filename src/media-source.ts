@@ -1,5 +1,10 @@
 import { BabySourceBuffer, getVideoTrackBuffer } from "./source-buffer";
-import { BabyVideoElement, updateDuration } from "./video-element";
+import {
+  BabyVideoElement,
+  MediaReadyState,
+  updateDuration,
+  updateReadyState,
+} from "./video-element";
 import { queueTask } from "./util";
 import { VideoTrackBuffer } from "./track-buffer";
 import { setEndTimeOnLastRange, TimeRanges } from "./time-ranges";
@@ -27,6 +32,7 @@ export let getActiveVideoTrackBuffer: (
   mediaSource: BabyMediaSource
 ) => VideoTrackBuffer | undefined;
 export let openIfEnded: (mediaSource: BabyMediaSource) => void;
+export let checkBuffer: (mediaSource: BabyMediaSource) => void;
 
 export class BabyMediaSource extends EventTarget {
   #duration: number = NaN;
@@ -233,6 +239,47 @@ export class BabyMediaSource extends EventTarget {
     return intersectionRanges;
   }
 
+  #checkBuffer(): void {
+    // https://w3c.github.io/media-source/#buffer-monitoring
+    const mediaElement = this.#mediaElement!;
+    const readyState = mediaElement.readyState;
+    // If the HTMLMediaElement.readyState attribute equals HAVE_NOTHING:
+    if (readyState === MediaReadyState.HAVE_NOTHING) {
+      // Abort these steps.
+      return;
+    }
+    const buffered = this.#getBuffered();
+    const currentTime = mediaElement.currentTime;
+    // If HTMLMediaElement.buffered does not contain a TimeRanges for the current playback position:
+    if (!buffered.contains(currentTime)) {
+      // Set the HTMLMediaElement.readyState attribute to HAVE_METADATA.
+      updateReadyState(mediaElement, MediaReadyState.HAVE_METADATA);
+      // Abort these steps.
+      return;
+    }
+    // If HTMLMediaElement.buffered contains a TimeRanges that includes the current playback position
+    // and enough data to ensure uninterrupted playback:
+    // TODO
+    // If HTMLMediaElement.buffered contains a TimeRanges that includes the current playback position
+    // and some time beyond the current playback position, then run the following steps:
+    if (buffered.containsRange(currentTime, currentTime + 0.1)) {
+      // Set the HTMLMediaElement.readyState attribute to HAVE_FUTURE_DATA.
+      // Playback may resume at this point if it was previously suspended by a transition to HAVE_CURRENT_DATA.
+      updateReadyState(mediaElement, MediaReadyState.HAVE_FUTURE_DATA);
+      // Abort these steps.
+      return;
+    }
+    // If HTMLMediaElement.buffered contains a TimeRanges that ends at the current playback position
+    // and does not have a range covering the time immediately after the current position:
+    if (buffered.containsRangeEndingAt(currentTime)) {
+      // Set the HTMLMediaElement.readyState attribute to HAVE_CURRENT_DATA.
+      // Playback is suspended at this point since the media element doesn't have enough data to advance the media timeline.
+      updateReadyState(mediaElement, MediaReadyState.HAVE_CURRENT_DATA);
+      // Abort these steps.
+      return;
+    }
+  }
+
   static {
     attachToMediaElement = (mediaSource, mediaElement) =>
       mediaSource.#attachToMediaElement(mediaElement);
@@ -246,6 +293,7 @@ export class BabyMediaSource extends EventTarget {
     openIfEnded = (mediaSource) => mediaSource.#openIfEnded();
     getActiveVideoTrackBuffer = (mediaSource) =>
       mediaSource.#getActiveVideoTrackBuffer();
+    checkBuffer = (mediaSource) => mediaSource.#checkBuffer();
   }
 }
 

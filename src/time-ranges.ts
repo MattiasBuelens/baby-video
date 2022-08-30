@@ -40,6 +40,10 @@ export class TimeRanges {
     );
   }
 
+  containsRangeEndingAt(rangeEnd: number): boolean {
+    return this.#ranges.some(([_, end]) => rangeEnd === end);
+  }
+
   intersect(other: TimeRanges): TimeRanges {
     // Based on TimeRanges::intersection from Mozilla Firefox
     // https://hg.mozilla.org/releases/mozilla-release/file/bd079aadd3fe/dom/html/TimeRanges.cpp#l137

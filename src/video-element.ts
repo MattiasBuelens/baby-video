@@ -2,6 +2,7 @@ import stylesheet from "./style.css";
 import {
   attachToMediaElement,
   BabyMediaSource,
+  checkBuffer,
   detachFromMediaElement,
   getActiveVideoTrackBuffer,
   getBuffered,
@@ -94,8 +95,7 @@ export class BabyVideoElement extends HTMLElement {
   }
 
   set currentTime(value: number) {
-    this.#currentTime = value;
-    this.#render();
+    this.#updateCurrentTime(value);
     this.#updatePlaying();
     this.#timeMarchesOn(false, performance.now());
   }
@@ -224,8 +224,7 @@ export class BabyVideoElement extends HTMLElement {
         );
         promises.forEach((deferred) => deferred.reject(error));
         // 2.4. Set the official playback position to the current playback position.
-        this.#currentTime = currentPlaybackPosition;
-        this.#render();
+        this.#updateCurrentTime(currentPlaybackPosition);
         this.#timeMarchesOn(false, now);
       });
       this.#updatePlaying();
@@ -257,10 +256,17 @@ export class BabyVideoElement extends HTMLElement {
     }
   }
 
-  #advanceCurrentTime(now: number): void {
-    this.#currentTime = this.#getCurrentPlaybackPosition(now);
-    this.#lastAdvanceTime = now;
+  #updateCurrentTime(currentTime: number) {
+    this.#currentTime = currentTime;
     this.#render();
+    if (this.#srcObject) {
+      checkBuffer(this.#srcObject);
+    }
+  }
+
+  #advanceCurrentTime(now: number): void {
+    this.#updateCurrentTime(this.#getCurrentPlaybackPosition(now));
+    this.#lastAdvanceTime = now;
     this.#timeMarchesOn(true, now);
     if (this.#isPotentiallyPlaying()) {
       this.#advanceLoop = requestAnimationFrame((now) =>
