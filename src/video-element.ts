@@ -102,6 +102,7 @@ export class BabyVideoElement extends HTMLElement {
   }
 
   set currentTime(value: number) {
+    value = Number(value);
     // https://html.spec.whatwg.org/multipage/media.html#dom-media-currenttime
     // On setting, if the media element's readyState is HAVE_NOTHING,
     // then it must set the media element's default playback start position to the new value;
