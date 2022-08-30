@@ -49,6 +49,7 @@ export class BabyVideoElement extends HTMLElement {
   #lastAdvanceTime: number = 0;
   #lastTimeUpdate: number = 0;
   #lastProgress: number = 0;
+  #nextProgressTimer: number = 0;
   #hasFiredLoadedData: boolean = false;
   #seekAbortController: AbortController = new AbortController();
 
@@ -153,6 +154,8 @@ export class BabyVideoElement extends HTMLElement {
     this.#readyState = MediaReadyState.HAVE_NOTHING;
     this.#seeking = false;
     this.#seekAbortController.abort();
+    this.#lastProgress = 0;
+    clearTimeout(this.#nextProgressTimer);
     if (srcObject) {
       attachToMediaElement(srcObject, this);
     }
@@ -530,10 +533,17 @@ export class BabyVideoElement extends HTMLElement {
     // https://html.spec.whatwg.org/multipage/media.html#concept-media-load-resource
     // While the load is not suspended (see below), every 350ms (±200ms) or for every byte received, whichever is least frequent,
     // queue a media element task given the media element to fire an event named progress at the element.
+    clearTimeout(this.#nextProgressTimer);
     const now = performance.now();
-    if (now - this.#lastProgress > 350) {
+    const timeUntilNextProgress = 350 - (now - this.#lastProgress);
+    if (timeUntilNextProgress <= 0) {
       this.#lastProgress = now;
       queueTask(() => this.dispatchEvent(new Event("progress")));
+    } else {
+      this.#nextProgressTimer = setTimeout(
+        () => this.#notifyProgress(),
+        timeUntilNextProgress
+      );
     }
   }
 
