@@ -154,8 +154,12 @@ export class BabyVideoElement extends HTMLElement {
     this.#readyState = MediaReadyState.HAVE_NOTHING;
     this.#seeking = false;
     this.#seekAbortController.abort();
+    this.#lastAdvanceTime = 0;
     this.#lastProgress = 0;
     clearTimeout(this.#nextProgressTimer);
+    this.#lastTimeUpdate = 0;
+    this.#updatePlaying();
+    queueTask(() => this.dispatchEvent(new Event("emptied")));
     if (srcObject) {
       attachToMediaElement(srcObject, this);
     }
