@@ -39,7 +39,7 @@ export class BabyVideoElement extends HTMLElement {
   #duration: number = NaN;
   #ended: boolean = false;
   #paused: boolean = true;
-  #readyState: MediaReadyState = 0;
+  #readyState: MediaReadyState = MediaReadyState.HAVE_NOTHING;
   #seeking: boolean = false;
   #srcObject: BabyMediaSource | undefined;
 
@@ -142,7 +142,14 @@ export class BabyVideoElement extends HTMLElement {
       detachFromMediaElement(this.#srcObject);
     }
     this.#srcObject = srcObject;
+    this.#currentTime = 0;
+    this.#duration = NaN;
     this.#hasFiredLoadedData = false;
+    this.#ended = false;
+    this.#paused = true;
+    this.#readyState = MediaReadyState.HAVE_NOTHING;
+    this.#seeking = false;
+    this.#seekAbortController.abort();
     if (srcObject) {
       attachToMediaElement(srcObject, this);
     }
