@@ -30,6 +30,7 @@ export let updateReadyState: (
   videoElement: BabyVideoElement,
   newReadyState: MediaReadyState
 ) => void;
+export let notifyProgress: (videoElement: BabyVideoElement) => void;
 
 export class BabyVideoElement extends HTMLElement {
   readonly #canvas: HTMLCanvasElement;
@@ -47,6 +48,7 @@ export class BabyVideoElement extends HTMLElement {
   #advanceLoop: number = 0;
   #lastAdvanceTime: number = 0;
   #lastTimeUpdate: number = 0;
+  #lastProgress: number = 0;
   #hasFiredLoadedData: boolean = false;
   #seekAbortController: AbortController = new AbortController();
 
@@ -524,6 +526,17 @@ export class BabyVideoElement extends HTMLElement {
     }
   }
 
+  #notifyProgress(): void {
+    // https://html.spec.whatwg.org/multipage/media.html#concept-media-load-resource
+    // While the load is not suspended (see below), every 350ms (±200ms) or for every byte received, whichever is least frequent,
+    // queue a media element task given the media element to fire an event named progress at the element.
+    const now = performance.now();
+    if (now - this.#lastProgress > 350) {
+      this.#lastProgress = now;
+      queueTask(() => this.dispatchEvent(new Event("progress")));
+    }
+  }
+
   static {
     updateDuration = (videoElement: BabyVideoElement, newDuration: number) => {
       videoElement.#updateDuration(newDuration);
@@ -533,6 +546,9 @@ export class BabyVideoElement extends HTMLElement {
       newReadyState: MediaReadyState
     ) => {
       videoElement.#updateReadyState(newReadyState);
+    };
+    notifyProgress = (videoElement: BabyVideoElement) => {
+      videoElement.#notifyProgress();
     };
   }
 }

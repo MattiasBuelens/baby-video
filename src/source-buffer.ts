@@ -26,7 +26,7 @@ import {
   TrackBuffer,
   VideoTrackBuffer,
 } from "./track-buffer";
-import { MediaReadyState, updateReadyState } from "./video-element";
+import { MediaReadyState, notifyProgress, updateReadyState } from "./video-element";
 import { setEndTimeOnLastRange, TimeRanges } from "./time-ranges";
 
 export let getVideoTrackBuffer: (
@@ -367,6 +367,7 @@ export class BabySourceBuffer extends EventTarget {
     // 5. If the media segment contains data beyond the current duration, then run the duration change
     //    algorithm with new duration set to the maximum of the current duration and the [[group end timestamp]].
     // TODO
+    notifyProgress(mediaElement);
   }
 
   #processSamples(trackId: number, samples: Sample[]): void {
