@@ -250,7 +250,9 @@ export class BabyVideoElement extends HTMLElement {
     // its current playback position must increase monotonically at the element's playbackRate units
     // of media time per unit time of the media timeline's clock.
     if (this.#isPotentiallyPlaying()) {
-      return this.#currentTime + (now - this.#lastAdvanceTime) / 1000;
+      return (
+        this.#currentTime + Math.max(0, now - this.#lastAdvanceTime) / 1000
+      );
     } else {
       return this.#currentTime;
     }
