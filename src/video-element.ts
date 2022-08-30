@@ -40,6 +40,7 @@ export class BabyVideoElement extends HTMLElement {
   #pendingPlayPromises: Array<Deferred<void>> = [];
   #advanceLoop: number = 0;
   #lastAdvanceTime: number = 0;
+  #lastTimeUpdate: number = 0;
 
   readonly #videoDecoder: VideoDecoder;
   #lastDecodedVideoSample: Sample | undefined;
@@ -96,6 +97,7 @@ export class BabyVideoElement extends HTMLElement {
     this.#currentTime = value;
     this.#render();
     this.#updatePlaying();
+    this.#timeMarchesOn(false, performance.now());
   }
 
   get duration(): number {
@@ -203,9 +205,8 @@ export class BabyVideoElement extends HTMLElement {
     // https://html.spec.whatwg.org/multipage/media.html#internal-pause-steps
     // 2. If the media element's paused attribute is false, run the following steps:
     if (!this.#paused) {
-      const currentPlaybackPosition = this.#getCurrentPlaybackPosition(
-        performance.now()
-      );
+      const now = performance.now();
+      const currentPlaybackPosition = this.#getCurrentPlaybackPosition(now);
       // 2.1. Change the value of paused to true.
       this.#paused = true;
       // 2.2. Take pending play promises and let promises be the result.
@@ -225,6 +226,7 @@ export class BabyVideoElement extends HTMLElement {
         // 2.4. Set the official playback position to the current playback position.
         this.#currentTime = currentPlaybackPosition;
         this.#render();
+        this.#timeMarchesOn(false, now);
       });
       this.#updatePlaying();
     }
@@ -259,10 +261,24 @@ export class BabyVideoElement extends HTMLElement {
     this.#currentTime = this.#getCurrentPlaybackPosition(now);
     this.#lastAdvanceTime = now;
     this.#render();
+    this.#timeMarchesOn(true, now);
     if (this.#isPotentiallyPlaying()) {
       this.#advanceLoop = requestAnimationFrame((now) =>
         this.#advanceCurrentTime(now)
       );
+    }
+  }
+
+  #timeMarchesOn(isNormalPlayback: boolean, now: number): void {
+    // https://html.spec.whatwg.org/multipage/media.html#time-marches-on
+    // 6. If the time was reached through the usual monotonic increase of the current playback position during normal playback,
+    //    and if the user agent has not fired a timeupdate event at the element in the past 15 to 250ms
+    //    and is not still running event handlers for such an event,
+    //    then the user agent must queue a media element task given the media element to fire an event
+    //    named timeupdate at the element.
+    if (isNormalPlayback && now - this.#lastTimeUpdate > 15) {
+      this.#lastTimeUpdate = now;
+      queueTask(() => this.dispatchEvent(new Event("timeupdate")));
     }
   }
 
