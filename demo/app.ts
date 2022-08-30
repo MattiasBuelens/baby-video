@@ -1,11 +1,18 @@
 import { BabyMediaSource, BabyVideoElement } from "../src/index";
 
 const video = document.querySelector<BabyVideoElement>("baby-video")!;
+video.addEventListener("loadedmetadata", logEvent);
+video.addEventListener("loadeddata", logEvent);
+video.addEventListener("canplay", logEvent);
+video.addEventListener("canplaythrough", logEvent);
+video.addEventListener("waiting", logEvent);
 video.addEventListener("play", logEvent);
 video.addEventListener("pause", logEvent);
 video.addEventListener("playing", logEvent);
 video.addEventListener("timeupdate", logEvent);
-video.addEventListener("waiting", logEvent);
+video.addEventListener("durationchange", logEvent);
+video.addEventListener("seeking", logEvent);
+video.addEventListener("seeked", logEvent);
 
 const mediaSource = new BabyMediaSource();
 video.srcObject = mediaSource;
