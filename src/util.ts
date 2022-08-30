@@ -21,3 +21,26 @@ export function concatUint8Arrays(
 export function queueTask(fn: () => void): void {
   setTimeout(fn, 0);
 }
+
+export class Deferred<T> {
+  readonly promise: Promise<T>;
+  #resolve?: (value: T) => void;
+  #reject?: (reason: any) => void;
+
+  constructor() {
+    this.promise = new Promise<T>((resolve, reject) => {
+      this.#resolve = resolve;
+      this.#reject = reject;
+    });
+  }
+
+  resolve(value: T) {
+    this.#resolve?.(value);
+    this.#resolve = this.#reject = undefined;
+  }
+
+  reject(reason: any) {
+    this.#reject?.(reason);
+    this.#resolve = this.#reject = undefined;
+  }
+}

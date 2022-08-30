@@ -6,7 +6,7 @@ import {
   getActiveVideoTrackBuffer,
   getBuffered,
 } from "./media-source";
-import { queueTask } from "./util";
+import { Deferred, queueTask } from "./util";
 import { TimeRanges } from "./time-ranges";
 import { Sample } from "mp4box";
 
@@ -32,8 +32,14 @@ export class BabyVideoElement extends HTMLElement {
   readonly #canvasContext: CanvasRenderingContext2D;
 
   #currentTime: number = 0;
+  #ended: boolean = false;
+  #paused: boolean = true;
   #readyState: MediaReadyState = 0;
   #srcObject: BabyMediaSource | undefined;
+
+  #pendingPlayPromises: Array<Deferred<void>> = [];
+  #advanceLoop: number = 0;
+  #lastAdvanceTime: number = 0;
 
   readonly #videoDecoder: VideoDecoder;
   #lastDecodedVideoSample: Sample | undefined;
@@ -89,6 +95,7 @@ export class BabyVideoElement extends HTMLElement {
   set currentTime(value: number) {
     this.#currentTime = value;
     this.#render();
+    this.#updatePlaying();
   }
 
   get duration(): number {
@@ -96,6 +103,14 @@ export class BabyVideoElement extends HTMLElement {
       return NaN;
     }
     return this.#srcObject.duration;
+  }
+
+  get ended(): boolean {
+    return this.#ended;
+  }
+
+  get paused(): boolean {
+    return this.#paused;
   }
 
   get readyState(): MediaReadyState {
@@ -113,6 +128,141 @@ export class BabyVideoElement extends HTMLElement {
     this.#srcObject = srcObject;
     if (srcObject) {
       attachToMediaElement(srcObject, this);
+    }
+  }
+
+  play(): Promise<void> {
+    // https://html.spec.whatwg.org/multipage/media.html#dom-media-play
+    // 3. Let promise be a new promise and append promise to the list of pending play promises.
+    const deferred = new Deferred<void>();
+    this.#pendingPlayPromises.push(deferred);
+    // 4. Run the internal play steps for the media element.
+    this.#internalPlay();
+    // 5. Return promise.
+    return deferred.promise;
+  }
+
+  #takePendingPlayPromises(): Array<Deferred<void>> {
+    // https://html.spec.whatwg.org/multipage/media.html#take-pending-play-promises
+    const pendingPlayPromises = this.#pendingPlayPromises.slice();
+    this.#pendingPlayPromises.length = 0;
+    return pendingPlayPromises;
+  }
+
+  #notifyAboutPlaying(): void {
+    // https://html.spec.whatwg.org/multipage/media.html#notify-about-playing
+    // 1. Take pending play promises and let promises be the result.
+    const promises = this.#takePendingPlayPromises();
+    // 2. Queue a media element task given the element and the following steps:
+    queueTask(() => {
+      // 2.1. Fire an event named playing at the element.
+      this.dispatchEvent(new Event("playing"));
+      // 2.2. Resolve pending play promises with promises.
+      promises.forEach((deferred) => deferred.resolve());
+    });
+    this.#updatePlaying();
+  }
+
+  #internalPlay(): void {
+    // https://html.spec.whatwg.org/multipage/media.html#internal-play-steps
+    // 2. If the playback has ended and the direction of playback is forwards,
+    //    seek to the earliest possible position of the media resource.
+    if (this.#ended) {
+      this.currentTime = 0;
+    }
+    if (this.#paused) {
+      // 3. If the media element's paused attribute is true, then:
+      // 3.1. Change the value of paused to false.
+      this.#paused = false;
+      // 3.3. Queue a media element task given the media element to fire an event named play at the element.
+      queueTask(() => this.dispatchEvent(new Event("play")));
+      if (this.#readyState <= MediaReadyState.HAVE_CURRENT_DATA) {
+        // 3.4. If the media element's readyState attribute has the value HAVE_NOTHING, HAVE_METADATA, or HAVE_CURRENT_DATA,
+        //      queue a media element task given the media element to fire an event named waiting at the element.
+        queueTask(() => this.dispatchEvent(new Event("waiting")));
+      } else {
+        // 3.4. Otherwise, the media element's readyState attribute has the value HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA:
+        //      notify about playing for the element.
+        this.#notifyAboutPlaying();
+      }
+    } else if (this.#readyState >= MediaReadyState.HAVE_FUTURE_DATA) {
+      // 4. Otherwise, if the media element's readyState attribute has the value HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA,
+      //    take pending play promises and queue a media element task given the media element
+      //    to resolve pending play promises with the result.
+      const promises = this.#takePendingPlayPromises();
+      queueTask(() => promises.forEach((deferred) => deferred.resolve()));
+    }
+  }
+
+  pause(): void {
+    // https://html.spec.whatwg.org/multipage/media.html#dom-media-pause
+    this.#internalPause();
+  }
+
+  #internalPause(): void {
+    // https://html.spec.whatwg.org/multipage/media.html#internal-pause-steps
+    // 2. If the media element's paused attribute is false, run the following steps:
+    if (!this.#paused) {
+      const currentPlaybackPosition = this.#getCurrentPlaybackPosition(
+        performance.now()
+      );
+      // 2.1. Change the value of paused to true.
+      this.#paused = true;
+      // 2.2. Take pending play promises and let promises be the result.
+      const promises = this.#takePendingPlayPromises();
+      // 2.3. Queue a media element task given the media element and the following steps:
+      queueTask(() => {
+        // 2.3.1. Fire an event named timeupdate at the element.
+        this.dispatchEvent(new Event("timeupdate"));
+        // 2.3.2. Fire an event named pause at the element.
+        this.dispatchEvent(new Event("pause"));
+        // 2.3.3. Reject pending play promises with promises and an "AbortError" DOMException.
+        const error = new DOMException(
+          "Aborted by a call to pause()",
+          "AbortError"
+        );
+        promises.forEach((deferred) => deferred.reject(error));
+        // 2.4. Set the official playback position to the current playback position.
+        this.#currentTime = currentPlaybackPosition;
+        this.#render();
+      });
+      this.#updatePlaying();
+    }
+  }
+
+  #updatePlaying(): void {
+    if (this.#isPotentiallyPlaying()) {
+      if (this.#advanceLoop === 0) {
+        this.#lastAdvanceTime = performance.now();
+        this.#advanceLoop = requestAnimationFrame((now) => {
+          this.#advanceCurrentTime(now);
+        });
+      }
+    } else if (this.#advanceLoop !== 0) {
+      cancelAnimationFrame(this.#advanceLoop);
+      this.#advanceLoop = 0;
+    }
+  }
+
+  #getCurrentPlaybackPosition(now: number): number {
+    // When a media element is potentially playing and its Document is a fully active Document,
+    // its current playback position must increase monotonically at the element's playbackRate units
+    // of media time per unit time of the media timeline's clock.
+    if (this.#isPotentiallyPlaying()) {
+      return this.#currentTime + (now - this.#lastAdvanceTime) / 1000;
+    } else {
+      return this.#currentTime;
+    }
+  }
+
+  #advanceCurrentTime(now: number): void {
+    this.#currentTime = this.#getCurrentPlaybackPosition(now);
+    this.#lastAdvanceTime = now;
+    this.#render();
+    if (this.#isPotentiallyPlaying()) {
+      this.#advanceLoop = requestAnimationFrame((now) =>
+        this.#advanceCurrentTime(now)
+      );
     }
   }
 
@@ -175,6 +325,22 @@ export class BabyVideoElement extends HTMLElement {
     this.#pendingVideoFrame = undefined;
   }
 
+  #isPotentiallyPlaying(): boolean {
+    // https://html.spec.whatwg.org/multipage/media.html#potentially-playing
+    return !this.#paused && !this.#ended && !this.#isBlocked();
+  }
+
+  #isBlocked(): boolean {
+    // https://html.spec.whatwg.org/multipage/media.html#blocked-media-element
+    return this.#readyState <= MediaReadyState.HAVE_CURRENT_DATA;
+  }
+
+  #updateReadyState(newReadyState: MediaReadyState): void {
+    this.#readyState = newReadyState;
+    // TODO https://html.spec.whatwg.org/multipage/media.html#ready-states
+    this.#updatePlaying();
+  }
+
   static {
     updateDuration = (videoElement: BabyVideoElement) => {
       queueTask(() => videoElement.dispatchEvent(new Event("durationchange")));
@@ -187,9 +353,7 @@ export class BabyVideoElement extends HTMLElement {
       videoElement: BabyVideoElement,
       newReadyState: MediaReadyState
     ) => {
-      videoElement.#readyState = newReadyState;
-      // TODO https://html.spec.whatwg.org/multipage/media.html#ready-states
-      videoElement.#render();
+      videoElement.#updateReadyState(newReadyState);
     };
   }
 }
