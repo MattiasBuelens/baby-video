@@ -19,19 +19,19 @@ export class TimeRanges {
     return this.#ranges[index][1];
   }
 
-  indexOf(time: number): number {
-    for (const [index, [start, end]] of this.#ranges.entries()) {
+  find(time: number): readonly [number, number] | undefined {
+    for (const [start, end] of this.#ranges) {
       if (start > time) {
         break;
       } else if (time <= end) {
-        return index;
+        return [start, end];
       }
     }
-    return -1;
+    return undefined;
   }
 
   contains(time: number): boolean {
-    return this.indexOf(time) >= 0;
+    return this.find(time) !== undefined;
   }
 
   containsRange(rangeStart: number, rangeEnd: number): boolean {
