@@ -42,6 +42,7 @@ export class BabyVideoElement extends HTMLElement {
   #advanceLoop: number = 0;
   #lastAdvanceTime: number = 0;
   #lastTimeUpdate: number = 0;
+  #hasFiredLoadedData: boolean = false;
 
   readonly #videoDecoder: VideoDecoder;
   #lastDecodedVideoSample: Sample | undefined;
@@ -128,6 +129,7 @@ export class BabyVideoElement extends HTMLElement {
       detachFromMediaElement(this.#srcObject);
     }
     this.#srcObject = srcObject;
+    this.#hasFiredLoadedData = false;
     if (srcObject) {
       attachToMediaElement(srcObject, this);
     }
@@ -360,9 +362,68 @@ export class BabyVideoElement extends HTMLElement {
   }
 
   #updateReadyState(newReadyState: MediaReadyState): void {
+    const wasPotentiallyPlaying = this.#isPotentiallyPlaying();
+    const previousReadyState = this.#readyState;
     this.#readyState = newReadyState;
-    // TODO https://html.spec.whatwg.org/multipage/media.html#ready-states
     this.#updatePlaying();
+    // TODO https://html.spec.whatwg.org/multipage/media.html#ready-states
+    // If the previous ready state was HAVE_NOTHING, and the new ready state is HAVE_METADATA
+    if (
+      previousReadyState === MediaReadyState.HAVE_NOTHING &&
+      newReadyState === MediaReadyState.HAVE_METADATA
+    ) {
+      // Queue a media element task given the media element to fire an event named loadedmetadata at the element.
+      queueTask(() => this.dispatchEvent(new Event("loadedmetadata")));
+      return;
+    }
+    // If the previous ready state was HAVE_METADATA and the new ready state is HAVE_CURRENT_DATA or greater
+    if (
+      previousReadyState === MediaReadyState.HAVE_METADATA &&
+      newReadyState >= MediaReadyState.HAVE_CURRENT_DATA
+    ) {
+      // If this is the first time this occurs for this media element since the load() algorithm was last invoked,
+      // the user agent must queue a media element task given the media element to fire an event named loadeddata at the element.
+      if (!this.#hasFiredLoadedData) {
+        this.#hasFiredLoadedData = true;
+        queueTask(() => this.dispatchEvent(new Event("loadeddata")));
+      }
+      // If the new ready state is HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA, then the relevant steps below must then be run also.
+    }
+    // If the previous ready state was HAVE_FUTURE_DATA or more, and the new ready state is HAVE_CURRENT_DATA or less
+    if (
+      previousReadyState >= MediaReadyState.HAVE_FUTURE_DATA &&
+      newReadyState <= MediaReadyState.HAVE_CURRENT_DATA
+    ) {
+      // If the media element was potentially playing before its readyState attribute changed to a value lower than HAVE_FUTURE_DATA,
+      // and the element has not ended playback, and playback has not stopped due to errors,
+      // paused for user interaction, or paused for in-band content,
+      // the user agent must queue a media element task given the media element to fire an event named timeupdate at the element,
+      // and queue a media element task given the media element to fire an event named waiting at the element.
+      if (wasPotentiallyPlaying && !this.#ended) {
+        queueTask(() => this.dispatchEvent(new Event("timeupdate")));
+        queueTask(() => this.dispatchEvent(new Event("waiting")));
+      }
+      return;
+    }
+    // If the previous ready state was HAVE_CURRENT_DATA or less, and the new ready state is HAVE_FUTURE_DATA
+    // Note: this also handles the first steps of HAVE_ENOUGH_DATA
+    if (
+      previousReadyState <= MediaReadyState.HAVE_CURRENT_DATA &&
+      newReadyState >= MediaReadyState.HAVE_FUTURE_DATA
+    ) {
+      // The user agent must queue a media element task given the media element to fire an event named canplay at the element.
+      queueTask(() => this.dispatchEvent(new Event("canplay")));
+      // If the element's paused attribute is false, the user agent must notify about playing for the element.
+      if (!this.#paused) {
+        this.#notifyAboutPlaying();
+      }
+    }
+    // If the new ready state is HAVE_ENOUGH_DATA
+    if (newReadyState === MediaReadyState.HAVE_ENOUGH_DATA) {
+      // Note: the first step is handled together with HAVE_FUTURE_DATA
+      // The user agent must queue a media element task given the media element to fire an event named canplaythrough at the element.
+      queueTask(() => this.dispatchEvent(new Event("canplaythrough")));
+    }
   }
 
   static {
