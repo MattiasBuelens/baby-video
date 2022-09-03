@@ -9,7 +9,6 @@ import {
 } from "./media-source";
 import { Deferred, queueTask, waitForEvent } from "./util";
 import { TimeRanges } from "./time-ranges";
-import { Sample } from "mp4box";
 
 const template = document.createElement("template");
 template.innerHTML = `<style>${stylesheet}</style>`;
@@ -54,7 +53,7 @@ export class BabyVideoElement extends HTMLElement {
   #seekAbortController: AbortController = new AbortController();
 
   readonly #videoDecoder: VideoDecoder;
-  #lastDecodedVideoSample: Sample | undefined;
+  #lastDecodedVideoSample: EncodedVideoChunk | undefined;
   #pendingVideoFrame: VideoFrame | undefined;
 
   constructor() {
@@ -396,14 +395,7 @@ export class BabyVideoElement extends HTMLElement {
         this.#lastDecodedVideoSample
       );
       for (const sample of decodeQueue) {
-        this.#videoDecoder.decode(
-          new EncodedVideoChunk({
-            type: sample.is_sync ? "key" : "delta",
-            timestamp: (1e6 * sample.cts) / sample.timescale,
-            duration: (1e6 * sample.duration) / sample.timescale,
-            data: sample.data,
-          })
-        );
+        this.#videoDecoder.decode(sample);
         this.#lastDecodedVideoSample = sample;
       }
     }

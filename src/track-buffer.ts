@@ -3,7 +3,15 @@ import { Sample } from "mp4box";
 
 const BUFFERED_TOLERANCE: number = 1e-6;
 
-export abstract class TrackBuffer {
+interface GroupOfPictures<T extends EncodedAudioChunk | EncodedVideoChunk> {
+  start: number;
+  end: number;
+  samples: T[];
+}
+
+export abstract class TrackBuffer<
+  T extends EncodedAudioChunk | EncodedVideoChunk
+> {
   readonly trackId: number;
   codecConfig: AudioDecoderConfig | VideoDecoderConfig;
   lastDecodeTimestamp: number | undefined = undefined;
@@ -11,6 +19,8 @@ export abstract class TrackBuffer {
   highestEndTimestamp: number | undefined = undefined;
   needRandomAccessPoint: boolean = true;
   trackBufferRanges: TimeRanges = new TimeRanges([]);
+  #gops: Array<GroupOfPictures<T>> = [];
+  #currentGop: GroupOfPictures<T> | undefined = undefined;
 
   protected constructor(
     trackId: number,
@@ -25,6 +35,7 @@ export abstract class TrackBuffer {
     this.lastFrameDuration = undefined;
     this.highestEndTimestamp = undefined;
     this.needRandomAccessPoint = true;
+    this.#currentGop = undefined;
   }
 
   addSample(sample: Sample): void {
@@ -42,7 +53,21 @@ export abstract class TrackBuffer {
     const frameEndTimestamp = (sample.cts + sample.duration) / sample.timescale;
     // 16. Add the coded frame with the presentation timestamp, decode timestamp,
     //     and frame duration to the track buffer.
-    this.addSampleInternal(sample);
+    const frame = this.createFrame(sample);
+    if (this.#currentGop === undefined || frame.type === "key") {
+      this.#currentGop = {
+        start: frame.timestamp,
+        end: frame.timestamp + frame.duration!,
+        samples: [frame],
+      };
+      this.#gops.push(this.#currentGop);
+    } else {
+      this.#currentGop.end = Math.max(
+        this.#currentGop.end,
+        frame.timestamp + frame.duration!
+      );
+      this.#currentGop.samples.push(frame);
+    }
     this.trackBufferRanges = this.trackBufferRanges.union(
       new TimeRanges([[pts, frameEndTimestamp]]),
       BUFFERED_TOLERANCE
@@ -62,88 +87,24 @@ export abstract class TrackBuffer {
     }
   }
 
-  protected abstract addSampleInternal(sample: Sample): void;
+  protected abstract createFrame(sample: Sample): T;
 
-  abstract findSampleForTime(time: number): Sample | undefined;
-
-  abstract getDecodeQueueForSample(
-    sample: Sample,
-    lastDecodedSample: Sample | undefined
-  ): Sample[];
-}
-
-export class AudioTrackBuffer extends TrackBuffer {
-  declare codecConfig: AudioDecoderConfig;
-  #samples: Sample[] = [];
-
-  constructor(trackId: number, codecConfig: AudioDecoderConfig) {
-    super(trackId, codecConfig);
-  }
-
-  protected addSampleInternal(sample: Sample): void {
-    this.#samples.push(sample);
-  }
-
-  findSampleForTime(time: number): Sample | undefined {
-    return findSampleForTime(this.#samples, time);
-  }
-
-  getDecodeQueueForSample(
-    sample: Sample,
-    _lastDecodedSample: Sample | undefined
-  ): Sample[] {
-    return [sample];
-  }
-}
-
-interface GroupOfPictures {
-  start: number;
-  end: number;
-  samples: Sample[];
-}
-
-export class VideoTrackBuffer extends TrackBuffer {
-  declare codecConfig: VideoDecoderConfig;
-  #gops: GroupOfPictures[] = [];
-  #currentGop: GroupOfPictures | undefined = undefined;
-
-  constructor(trackId: number, codecConfig: VideoDecoderConfig) {
-    super(trackId, codecConfig);
-  }
-
-  requireRandomAccessPoint(): void {
-    super.requireRandomAccessPoint();
-    this.#currentGop = undefined;
-  }
-
-  protected addSampleInternal(sample: Sample): void {
-    if (this.#currentGop === undefined || sample.is_sync) {
-      this.#currentGop = {
-        start: sample.cts / sample.timescale,
-        end: (sample.cts + sample.duration) / sample.timescale,
-        samples: [sample],
-      };
-      this.#gops.push(this.#currentGop);
-    } else {
-      this.#currentGop.end = Math.max(
-        this.#currentGop.end,
-        (sample.cts + sample.duration) / sample.timescale
-      );
-      this.#currentGop.samples.push(sample);
-    }
-  }
-
-  findSampleForTime(time: number): Sample | undefined {
+  findSampleForTime(time: number): T | undefined {
+    const timeInMicros = time * 1e6;
     const containingGop = this.#gops.find((gop) => {
-      return gop.start <= time && time < gop.end;
+      return gop.start <= timeInMicros && timeInMicros < gop.end;
     });
-    return containingGop && findSampleForTime(containingGop.samples, time);
+    if (!containingGop) {
+      return undefined;
+    }
+    return containingGop.samples.find(
+      (sample) =>
+        sample.timestamp <= timeInMicros &&
+        timeInMicros < sample.timestamp + sample.duration!
+    );
   }
 
-  getDecodeQueueForSample(
-    sample: Sample,
-    lastDecodedSample: Sample | undefined
-  ): Sample[] {
+  getDecodeQueueForSample(sample: T, lastDecodedSample: T | undefined): T[] {
     const containingGop = this.#gops.find((gop) => {
       return gop.samples.includes(sample);
     })!;
@@ -164,13 +125,36 @@ export class VideoTrackBuffer extends TrackBuffer {
   }
 }
 
-function findSampleForTime(
-  samples: readonly Sample[],
-  time: number
-): Sample | undefined {
-  return samples.find((sample) => {
-    const start = sample.cts / sample.timescale;
-    const end = (sample.cts + sample.duration) / sample.timescale;
-    return start <= time && time < end;
-  });
+export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
+  declare codecConfig: AudioDecoderConfig;
+
+  constructor(trackId: number, codecConfig: AudioDecoderConfig) {
+    super(trackId, codecConfig);
+  }
+
+  protected createFrame(sample: Sample): EncodedAudioChunk {
+    return new EncodedAudioChunk({
+      timestamp: (1e6 * sample.cts) / sample.timescale,
+      duration: (1e6 * sample.duration) / sample.timescale,
+      data: sample.data,
+      type: sample.is_sync ? "key" : "delta",
+    });
+  }
+}
+
+export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
+  declare codecConfig: VideoDecoderConfig;
+
+  constructor(trackId: number, codecConfig: VideoDecoderConfig) {
+    super(trackId, codecConfig);
+  }
+
+  protected createFrame(sample: Sample): EncodedVideoChunk {
+    return new EncodedVideoChunk({
+      timestamp: (1e6 * sample.cts) / sample.timescale,
+      duration: (1e6 * sample.duration) / sample.timescale,
+      data: sample.data,
+      type: sample.is_sync ? "key" : "delta",
+    });
+  }
 }
