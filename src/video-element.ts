@@ -53,7 +53,7 @@ export class BabyVideoElement extends HTMLElement {
   #seekAbortController: AbortController = new AbortController();
 
   readonly #videoDecoder: VideoDecoder;
-  #lastDecodedVideoSample: EncodedVideoChunk | undefined;
+  #lastDecodedVideoFrame: EncodedVideoChunk | undefined;
   #pendingVideoFrame: VideoFrame | undefined;
 
   constructor() {
@@ -388,15 +388,15 @@ export class BabyVideoElement extends HTMLElement {
     if (this.#videoDecoder.state === "unconfigured") {
       this.#videoDecoder.configure(videoTrackBuffer.codecConfig);
     }
-    const sampleAtTime = videoTrackBuffer.findSampleForTime(this.currentTime);
-    if (sampleAtTime && this.#lastDecodedVideoSample !== sampleAtTime) {
-      const decodeQueue = videoTrackBuffer.getDecodeQueueForSample(
-        sampleAtTime,
-        this.#lastDecodedVideoSample
+    const frameAtTime = videoTrackBuffer.findFrameForTime(this.currentTime);
+    if (frameAtTime && this.#lastDecodedVideoFrame !== frameAtTime) {
+      const decodeQueue = videoTrackBuffer.getDecodeQueueForFrame(
+        frameAtTime,
+        this.#lastDecodedVideoFrame
       );
-      for (const sample of decodeQueue) {
-        this.#videoDecoder.decode(sample);
-        this.#lastDecodedVideoSample = sample;
+      for (const frame of decodeQueue) {
+        this.#videoDecoder.decode(frame);
+        this.#lastDecodedVideoFrame = frame;
       }
     }
   }

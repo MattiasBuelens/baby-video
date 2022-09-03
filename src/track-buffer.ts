@@ -6,7 +6,7 @@ const BUFFERED_TOLERANCE: number = 1e-6;
 interface GroupOfPictures<T extends EncodedAudioChunk | EncodedVideoChunk> {
   start: number;
   end: number;
-  samples: T[];
+  frames: T[];
 }
 
 export abstract class TrackBuffer<
@@ -58,7 +58,7 @@ export abstract class TrackBuffer<
       this.#currentGop = {
         start: frame.timestamp,
         end: frame.timestamp + frame.duration!,
-        samples: [frame],
+        frames: [frame],
       };
       this.#gops.push(this.#currentGop);
     } else {
@@ -66,7 +66,7 @@ export abstract class TrackBuffer<
         this.#currentGop.end,
         frame.timestamp + frame.duration!
       );
-      this.#currentGop.samples.push(frame);
+      this.#currentGop.frames.push(frame);
     }
     this.trackBufferRanges = this.trackBufferRanges.union(
       new TimeRanges([[pts, frameEndTimestamp]]),
@@ -89,7 +89,7 @@ export abstract class TrackBuffer<
 
   protected abstract createFrame(sample: Sample): T;
 
-  findSampleForTime(time: number): T | undefined {
+  findFrameForTime(time: number): T | undefined {
     const timeInMicros = time * 1e6;
     const containingGop = this.#gops.find((gop) => {
       return gop.start <= timeInMicros && timeInMicros < gop.end;
@@ -97,31 +97,31 @@ export abstract class TrackBuffer<
     if (!containingGop) {
       return undefined;
     }
-    return containingGop.samples.find(
+    return containingGop.frames.find(
       (sample) =>
         sample.timestamp <= timeInMicros &&
         timeInMicros < sample.timestamp + sample.duration!
     );
   }
 
-  getDecodeQueueForSample(sample: T, lastDecodedSample: T | undefined): T[] {
+  getDecodeQueueForFrame(frame: T, lastDecodedFrame: T | undefined): T[] {
     const containingGop = this.#gops.find((gop) => {
-      return gop.samples.includes(sample);
+      return gop.frames.includes(frame);
     })!;
-    // By default, decode from the first sample in the GOP (i.e. the sync sample)
-    // up to (and including) the requested sample.
+    // By default, decode from the first frame in the GOP (i.e. the sync frame)
+    // up to (and including) the requested frame.
     let startIndex = 0;
-    let endIndex = containingGop.samples.indexOf(sample);
-    if (lastDecodedSample !== undefined) {
-      const lastDecodedSampleIndex =
-        containingGop.samples.indexOf(lastDecodedSample);
-      // If last decoded sample is inside same GOP and precedes the requested sample,
-      // decode starting from the last decode sample.
-      if (lastDecodedSampleIndex >= 0 && lastDecodedSampleIndex < endIndex) {
-        startIndex = lastDecodedSampleIndex + 1;
+    let endIndex = containingGop.frames.indexOf(frame);
+    if (lastDecodedFrame !== undefined) {
+      const lastDecodedFrameIndex =
+        containingGop.frames.indexOf(lastDecodedFrame);
+      // If last decoded frame is inside same GOP and precedes the requested frame,
+      // decode starting from the last decode frame.
+      if (lastDecodedFrameIndex >= 0 && lastDecodedFrameIndex < endIndex) {
+        startIndex = lastDecodedFrameIndex + 1;
       }
     }
-    return containingGop.samples.slice(startIndex, endIndex + 1);
+    return containingGop.frames.slice(startIndex, endIndex + 1);
   }
 }
 
