@@ -26,7 +26,11 @@ import {
   TrackBuffer,
   VideoTrackBuffer,
 } from "./track-buffer";
-import { MediaReadyState, notifyProgress, updateReadyState } from "./video-element";
+import {
+  MediaReadyState,
+  notifyProgress,
+  updateReadyState,
+} from "./video-element";
 import { setEndTimeOnLastRange, TimeRanges } from "./time-ranges";
 
 export let getVideoTrackBuffer: (
@@ -248,13 +252,15 @@ export class BabySourceBuffer extends EventTarget {
         buildVideoConfig(trackInfo, this.#isoFile!.getTrackById(trackInfo.id))
       );
       for (const audioTrackConfig of audioTrackConfigs) {
-        if (!(await AudioDecoder.isConfigSupported(audioTrackConfig))) {
+        const support = await AudioDecoder.isConfigSupported(audioTrackConfig);
+        if (!support.supported) {
           this.#appendError();
           return;
         }
       }
       for (const videoTrackConfig of videoTrackConfigs) {
-        if (!(await VideoDecoder.isConfigSupported(videoTrackConfig))) {
+        const support = await VideoDecoder.isConfigSupported(videoTrackConfig);
+        if (!support.supported) {
           this.#appendError();
           return;
         }
