@@ -53,8 +53,10 @@ export class BabyVideoElement extends HTMLElement {
   #seekAbortController: AbortController = new AbortController();
 
   readonly #videoDecoder: VideoDecoder;
-  #lastDecodedVideoFrame: EncodedVideoChunk | undefined;
-  #pendingVideoFrame: VideoFrame | undefined;
+  #lastDecodingVideoFrame: EncodedVideoChunk | undefined = undefined;
+  #decodingVideoFrames: EncodedVideoChunk[] = [];
+  #decodedVideoFrames: VideoFrame[] = [];
+  #nextRenderFrame: number = 0;
 
   constructor() {
     super();
@@ -292,7 +294,7 @@ export class BabyVideoElement extends HTMLElement {
 
   #updateCurrentTime(currentTime: number) {
     this.#currentTime = currentTime;
-    this.#render();
+    this.#decodeVideoFrames();
     if (this.#srcObject) {
       checkBuffer(this.#srcObject);
     }
@@ -348,6 +350,7 @@ export class BabyVideoElement extends HTMLElement {
     // 10. Queue a media element task given the media element to fire an event named seeking at the element.
     queueTask(() => this.dispatchEvent(new Event("seeking")));
     // 11. Set the current playback position to the new playback position.
+    this.#resetVideoDecoder();
     this.#updateCurrentTime(newPosition);
     this.#updatePlaying();
     // 12. Wait until the user agent has established whether or not the media data for the new playback position
@@ -376,7 +379,7 @@ export class BabyVideoElement extends HTMLElement {
     queueTask(() => this.dispatchEvent(new Event("seeked")));
   }
 
-  #render(): void {
+  #decodeVideoFrames(): void {
     const mediaSource = this.#srcObject;
     if (!mediaSource) {
       return;
@@ -389,32 +392,74 @@ export class BabyVideoElement extends HTMLElement {
       this.#videoDecoder.configure(videoTrackBuffer.codecConfig);
     }
     const frameAtTime = videoTrackBuffer.findFrameForTime(this.currentTime);
-    if (frameAtTime && this.#lastDecodedVideoFrame !== frameAtTime) {
+    if (frameAtTime && this.#lastDecodingVideoFrame !== frameAtTime) {
       const decodeQueue = videoTrackBuffer.getDecodeQueueForFrame(
         frameAtTime,
-        this.#lastDecodedVideoFrame
+        this.#lastDecodingVideoFrame
       );
+      this.#lastDecodingVideoFrame = frameAtTime;
       for (const frame of decodeQueue) {
         this.#videoDecoder.decode(frame);
-        this.#lastDecodedVideoFrame = frame;
+        this.#decodingVideoFrames.push(frame);
       }
     }
   }
 
   #onVideoFrame(frame: VideoFrame): void {
-    if (this.#pendingVideoFrame) {
-      this.#pendingVideoFrame.close();
-    } else {
-      requestAnimationFrame(() => this.#renderVideoFrame());
+    const decodingFrameIndex = this.#decodingVideoFrames.findIndex(
+      (x) => x.timestamp === frame.timestamp
+    );
+    if (decodingFrameIndex < 0) {
+      // Drop frames that are no longer in the decode queue.
+      frame.close();
+      return;
     }
-    this.#pendingVideoFrame = frame;
+    const decodingFrame = this.#decodingVideoFrames[decodingFrameIndex];
+    this.#decodingVideoFrames.splice(decodingFrameIndex, 1);
+    // Drop frames that are before current time, since we're too late to render them.
+    const currentTimeInMicros = 1e6 * this.#currentTime;
+    if (
+      decodingFrame.timestamp! + decodingFrame.duration! <=
+      currentTimeInMicros
+    ) {
+      frame.close();
+      return;
+    }
+    // Note: Chrome does not yet copy EncodedVideoChunk.duration to VideoFrame.duration
+    const newFrame = new VideoFrame(frame as unknown as CanvasImageSource, {
+      duration: decodingFrame.duration!,
+    });
+    frame.close();
+    frame = newFrame;
+    this.#decodedVideoFrames.push(newFrame);
+    if (this.#nextRenderFrame === 0) {
+      this.#nextRenderFrame = requestAnimationFrame(() =>
+        this.#renderVideoFrame()
+      );
+    }
   }
 
   #renderVideoFrame(): void {
-    const frame = this.#pendingVideoFrame;
-    if (!frame) {
-      return;
+    const currentTimeInMicros = 1e6 * this.#currentTime;
+    // Drop all frames that are before current time, since we're too late to render them.
+    let nbOfDroppedFrames = 0;
+    for (let i = 0; i < this.#decodedVideoFrames.length; i++) {
+      const frame = this.#decodedVideoFrames[i];
+      if (frame.timestamp! + frame.duration! <= currentTimeInMicros) {
+        frame.close();
+        nbOfDroppedFrames++;
+      }
     }
+    this.#decodedVideoFrames.splice(0, nbOfDroppedFrames);
+    // Render the frame at current time.
+    let currentFrameIndex = this.#decodedVideoFrames.findIndex((frame) => {
+      return (
+        frame.timestamp! <= currentTimeInMicros &&
+        currentTimeInMicros < frame.timestamp! + frame.duration!
+      );
+    });
+    if (currentFrameIndex >= 0) {
+    const frame = this.#decodedVideoFrames[currentFrameIndex];
     this.#canvas.width = frame.displayWidth;
     this.#canvas.height = frame.displayHeight;
     this.#canvasContext.drawImage(
@@ -425,7 +470,26 @@ export class BabyVideoElement extends HTMLElement {
       frame.displayHeight
     );
     frame.close();
-    this.#pendingVideoFrame = undefined;
+    this.#decodedVideoFrames.splice(currentFrameIndex, 1);
+    }
+    // Schedule the next render.
+    if (this.#decodedVideoFrames.length > 0 && this.#isPotentiallyPlaying()) {
+      this.#nextRenderFrame = requestAnimationFrame(() =>
+        this.#renderVideoFrame()
+      );
+    } else {
+      this.#nextRenderFrame = 0;
+    }
+  }
+
+  #resetVideoDecoder(): void {
+    for (const frame of this.#decodedVideoFrames) {
+      frame.close();
+    }
+    this.#lastDecodingVideoFrame = undefined;
+    this.#decodingVideoFrames.length = 0;
+    this.#decodedVideoFrames.length = 0;
+    this.#videoDecoder.reset();
   }
 
   #isPotentiallyPlaying(): boolean {
