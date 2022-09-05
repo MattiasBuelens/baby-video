@@ -8,8 +8,14 @@
     <script type="module" src="./demo/app.ts"></script>
   </head>
   <body>
-    <media-controller style="max-width: 100%; max-height: 100%; aspect-ratio: 16 / 9">
+    <media-controller
+      style="max-width: 100%; max-height: 100%; aspect-ratio: 16 / 9"
+    >
       <baby-video slot="media"></baby-video>
+      <media-loading-indicator
+        slot="centered-chrome"
+        no-auto-hide
+      ></media-loading-indicator>
       <media-control-bar>
         <media-play-button></media-play-button>
         <media-time-display show-duration></media-time-display>
