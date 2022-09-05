@@ -3,15 +3,15 @@ import { Sample } from "mp4box";
 
 const BUFFERED_TOLERANCE: number = 1e-6;
 
-interface GroupOfPictures<T extends EncodedAudioChunk | EncodedVideoChunk> {
+export type EncodedChunk = EncodedAudioChunk | EncodedVideoChunk;
+
+interface GroupOfPictures<T extends EncodedChunk> {
   start: number;
   end: number;
   frames: T[];
 }
 
-export abstract class TrackBuffer<
-  T extends EncodedAudioChunk | EncodedVideoChunk
-> {
+export abstract class TrackBuffer<T extends EncodedChunk = EncodedChunk> {
   readonly trackId: number;
   codecConfig: AudioDecoderConfig | VideoDecoderConfig;
   lastDecodeTimestamp: number | undefined = undefined;
