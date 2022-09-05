@@ -459,18 +459,18 @@ export class BabyVideoElement extends HTMLElement {
       );
     });
     if (currentFrameIndex >= 0) {
-    const frame = this.#decodedVideoFrames[currentFrameIndex];
-    this.#canvas.width = frame.displayWidth;
-    this.#canvas.height = frame.displayHeight;
-    this.#canvasContext.drawImage(
-      frame,
-      0,
-      0,
-      frame.displayWidth,
-      frame.displayHeight
-    );
-    frame.close();
-    this.#decodedVideoFrames.splice(currentFrameIndex, 1);
+      const frame = this.#decodedVideoFrames[currentFrameIndex];
+      this.#canvas.width = frame.displayWidth;
+      this.#canvas.height = frame.displayHeight;
+      this.#canvasContext.drawImage(
+        frame,
+        0,
+        0,
+        frame.displayWidth,
+        frame.displayHeight
+      );
+      frame.close();
+      this.#decodedVideoFrames.splice(currentFrameIndex, 1);
     }
     // Schedule the next render.
     if (this.#decodedVideoFrames.length > 0 && this.#isPotentiallyPlaying()) {
