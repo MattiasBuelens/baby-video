@@ -61,6 +61,7 @@ export abstract class TrackBuffer<T extends EncodedChunk = EncodedChunk> {
         frames: [frame],
       };
       this.#gops.push(this.#currentGop);
+      this.#gops.sort(compareGopByStart);
     } else {
       this.#currentGop.end = Math.max(
         this.#currentGop.end,
@@ -157,4 +158,11 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
       type: sample.is_sync ? "key" : "delta",
     });
   }
+}
+
+function compareGopByStart<T extends EncodedChunk>(
+  left: GroupOfPictures<T>,
+  right: GroupOfPictures<T>
+): number {
+  return left.start - right.start;
 }
