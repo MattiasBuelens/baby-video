@@ -114,6 +114,44 @@ export class BabySourceBuffer extends EventTarget {
     queueMicrotask(() => this.#bufferAppend());
   }
 
+  remove(start: number, end: number): void {
+    // https://w3c.github.io/media-source/#dom-sourcebuffer-remove
+    // 1. If this object has been removed from the sourceBuffers attribute of the parent media source
+    //    then throw an InvalidStateError exception and abort these steps.
+    if (!this.#parent.sourceBuffers.includes(this)) {
+      throw new DOMException("Source buffer was removed", "InvalidStateError");
+    }
+    // 2. If the updating attribute equals true, then throw an InvalidStateError exception and
+    //    abort these steps.
+    if (this.#updating) {
+      throw new DOMException(
+        "Source buffer must not be updating",
+        "InvalidStateError"
+      );
+    }
+    // 3. If duration equals NaN, then throw a TypeError exception and abort these steps.
+    const duration = this.#parent.duration;
+    if (Number.isNaN(duration)) {
+      throw new TypeError("Duration must not be NaN");
+    }
+    // 4. If start is negative or greater than duration,
+    //    then throw a TypeError exception and abort these steps.
+    if (start < 0 || start > duration) {
+      throw new TypeError("Start must be positive and less than duration");
+    }
+    // 5. If end is less than or equal to start or end equals NaN,
+    //    then throw a TypeError exception and abort these steps.
+    if (end <= start || Number.isNaN(end)) {
+      throw new TypeError("End must be greater than start");
+    }
+    // 6. If the readyState attribute of the parent media source is in the "ended" state
+    //    then run the following steps...
+    openIfEnded(this.#parent);
+    // 7. Run the range removal algorithm with start and end
+    //    as the start and end of the removal range.
+    this.#rangeRemoval(start, end);
+  }
+
   #prepareAppend(): void {
     // https://w3c.github.io/media-source/#sourcebuffer-prepare-append
     // 1. If the SourceBuffer has been removed from the sourceBuffers attribute of the parent media source
@@ -427,6 +465,71 @@ export class BabySourceBuffer extends EventTarget {
       // TODO 11 to 15 Remove overlapping frames
       // Steps 16 to 19
       trackBuffer.addSample(sample);
+    }
+  }
+
+  #rangeRemoval(start: number, end: number): void {
+    // https://w3c.github.io/media-source/#dfn-range-removal
+    // 3. Set the updating attribute to true.
+    this.#updating = true;
+    // 4. Queue a task to fire an event named updatestart at this SourceBuffer object.
+    queueTask(() => this.dispatchEvent(new Event("updatestart")));
+    // 5. Return control to the caller and run the rest of the steps asynchronously.
+    queueMicrotask(() => {
+      // 6. Run the coded frame removal algorithm with start and end as the start and end of the removal range.
+      this.#codedFrameRemoval(start, end);
+      // 7. Set the updating attribute to false.
+      this.#updating = false;
+      // 8. Queue a task to fire an event named update at this SourceBuffer object.
+      queueTask(() => this.dispatchEvent(new Event("update")));
+      // 9. Queue a task to fire an event named updateend at this SourceBuffer object.
+      queueTask(() => this.dispatchEvent(new Event("updateend")));
+    });
+  }
+
+  #codedFrameRemoval(start: number, end: number): void {
+    // https://w3c.github.io/media-source/#dfn-coded-frame-removal
+    const startInMicros = 1e6 * start;
+    const endInMicros = 1e6 * end;
+    const mediaElement = getMediaElement(this.#parent)!;
+    const currentTimeInMicros = 1e6 * mediaElement.currentTime;
+    // 3. For each track buffer in this SourceBuffer, run the following steps:
+    for (const trackBuffer of this.#trackBuffers) {
+      // 3.1. Let remove end timestamp be the current value of duration.
+      let removeEndTimestamp = 1e6 * this.#parent.duration;
+      // 3.2. If this track buffer has a random access point timestamp
+      //      that is greater than or equal to end, then update remove end timestamp
+      //      to that random access point timestamp.
+      removeEndTimestamp =
+        trackBuffer.getRandomAccessPointAtOrAfter(endInMicros) ??
+        removeEndTimestamp;
+      // 3.3. Remove all media data, from this track buffer, that contain starting timestamps
+      //      greater than or equal to start and less than the remove end timestamp.
+      trackBuffer.removeSamples(startInMicros, removeEndTimestamp);
+      // 3.3.1. For each removed frame, if the frame has a decode timestamp equal to
+      //        the last decode timestamp for the frame's track, run the following steps:
+      // TODO
+      // 3.3.2. Unset the last decode timestamp on all track buffers.
+      // 3.3.3. Unset the last frame duration on all track buffers.
+      // 3.3.4. Unset the highest end timestamp on all track buffers.
+      // 3.3.5. Set the need random access point flag on all track buffers to true.
+      trackBuffer.requireRandomAccessPoint();
+      // 3.4. Remove all possible decoding dependencies on the coded frames removed
+      //      in the previous step by removing all coded frames from this track buffer
+      //      between those frames removed in the previous step and the next random
+      //      access point after those removed frames.
+      // (Already handled by removeSamples.)
+      // 3.5. If this object is in activeSourceBuffers, the current playback position
+      //      is greater than or equal to start and less than the remove end timestamp,
+      //      and HTMLMediaElement.readyState is greater than HAVE_METADATA,
+      //      then set the HTMLMediaElement.readyState attribute to HAVE_METADATA and stall playback.
+      if (
+        currentTimeInMicros >= start &&
+        currentTimeInMicros < removeEndTimestamp &&
+        mediaElement.readyState > MediaReadyState.HAVE_METADATA
+      ) {
+        updateReadyState(mediaElement, MediaReadyState.HAVE_METADATA);
+      }
     }
   }
 

@@ -135,6 +135,27 @@ export class TimeRanges {
     ranges.push([currentStart, currentEnd]);
     return new TimeRanges(ranges);
   }
+
+  invert(): TimeRanges {
+    if (this.length === 0) {
+      return new TimeRanges([[-Infinity, +Infinity]]);
+    }
+    const ranges: TimeRange[] = [];
+    if (this.#ranges[0][0] > -Infinity) {
+      ranges.push([-Infinity, this.#ranges[0][0]]);
+    }
+    for (let i = 1; i < this.#ranges.length; i++) {
+      ranges.push([this.#ranges[i - 1][1], this.#ranges[i][0]]);
+    }
+    if (this.#ranges[this.#ranges.length - 1][1] < Infinity) {
+      ranges.push([this.#ranges[this.#ranges.length - 1][1], Infinity]);
+    }
+    return new TimeRanges(ranges);
+  }
+
+  subtract(other: TimeRanges): TimeRanges {
+    return this.intersect(other.invert());
+  }
 }
 
 export function setEndTimeOnLastRange(

@@ -124,6 +124,45 @@ export abstract class TrackBuffer<T extends EncodedChunk = EncodedChunk> {
     }
     return containingGop.frames.slice(startIndex, endIndex + 1);
   }
+
+  getRandomAccessPointAtOrAfter(timeInMicros: number): number | undefined {
+    return this.#gops.find((gop) => gop.start >= timeInMicros)?.start;
+  }
+
+  removeSamples(startInMicros: number, endInMicros: number): void {
+    // https://w3c.github.io/media-source/#dfn-coded-frame-removal
+    // 3.3. Remove all media data, from this track buffer, that contain starting timestamps
+    //      greater than or equal to start and less than the remove end timestamp.
+    // 3.4. Remove all possible decoding dependencies on the coded frames removed
+    //      in the previous step by removing all coded frames from this track buffer
+    //      between those frames removed in the previous step and the next random
+    //      access point after those removed frames.
+    for (let i = this.#gops.length - 1; i >= 0; i--) {
+      const gop = this.#gops[i];
+      const removeFrom = gop.frames.findIndex(
+        (frame) =>
+          frame.timestamp >= startInMicros && frame.timestamp < endInMicros
+      );
+      if (removeFrom < 0) {
+        // Keep entire GOP.
+      } else if (removeFrom === 0) {
+        // Remove entire GOP.
+        this.#gops.splice(i, 1);
+        this.trackBufferRanges = this.trackBufferRanges.subtract(
+          new TimeRanges([[gop.start / 1e6, gop.end / 1e6]])
+        );
+      } else {
+        // Remove some frames.
+        const lastFrame = gop.frames[removeFrom - 1];
+        const oldEnd = gop.end;
+        gop.end = lastFrame.timestamp! + lastFrame.duration!;
+        gop.frames.splice(removeFrom);
+        this.trackBufferRanges = this.trackBufferRanges.subtract(
+          new TimeRanges([[gop.end / 1e6, oldEnd / 1e6]])
+        );
+      }
+    }
+  }
 }
 
 export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {

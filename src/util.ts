@@ -40,6 +40,10 @@ export function waitForEvent(
   });
 }
 
+export function isDefined<T>(x: T | undefined): x is T {
+  return x !== undefined;
+}
+
 export class Deferred<T> {
   readonly promise: Promise<T>;
   #resolve?: (value: T) => void;
