@@ -483,6 +483,12 @@ export class BabySourceBuffer extends EventTarget {
       // Steps 16 to 19
       trackBuffer.addSample(sample);
     }
+    if (samples.length > 0) {
+      this.#isoFile!.releaseUsedSamples(
+        trackId,
+        samples[samples.length - 1].number
+      );
+    }
   }
 
   #rangeRemoval(start: number, end: number): void {
