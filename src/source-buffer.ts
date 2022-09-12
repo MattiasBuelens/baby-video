@@ -45,6 +45,7 @@ export class BabySourceBuffer extends EventTarget {
   #trackBuffers: TrackBuffer[] = [];
 
   // MP4 specific things
+  #initializationData: Uint8Array | undefined = undefined;
   #isoFile: ISOFile | undefined = undefined;
   #isoFilePosition: number = 0;
   #mp4Info: Info | undefined = undefined;
@@ -219,14 +220,22 @@ export class BabySourceBuffer extends EventTarget {
   async #parseBox(boxType: string, boxData: ArrayBuffer): Promise<void> {
     // https://w3c.github.io/media-source/#sourcebuffer-segment-parser-loop
     if (boxType === "ftyp") {
-      // 5.2. Run the initialization segment received algorithm.
-      this.#isoFile = createFile();
-      this.#isoFile.appendBuffer(toMP4ArrayBuffer(boxData, 0));
-      this.#isoFilePosition += boxData.byteLength;
+      this.#initializationData = new Uint8Array(boxData);
+      this.#isoFile = undefined;
+      this.#mp4Info = undefined;
     } else if (boxType === "moov") {
       // 5.2. Run the initialization segment received algorithm.
+      this.#initializationData = concatUint8Arrays(
+        this.#initializationData!,
+        new Uint8Array(boxData)
+      );
+      this.#isoFile = createFile();
+      this.#isoFilePosition = 0;
       this.#isoFile!.appendBuffer(
-        toMP4ArrayBuffer(boxData, this.#isoFilePosition)
+        toMP4ArrayBuffer(
+          this.#initializationData!.buffer,
+          this.#isoFilePosition
+        )
       );
       this.#isoFilePosition += boxData.byteLength;
       this.#mp4Info = this.#isoFile!.getInfo();
@@ -238,6 +247,18 @@ export class BabySourceBuffer extends EventTarget {
       if (!this.#firstInitializationSegmentReceived) {
         this.#appendError();
         return;
+      }
+      if (boxType === "moof") {
+        // Parse each movie fragment separately.
+        this.#isoFile = createFile();
+        this.#isoFilePosition = 0;
+        this.#isoFile.appendBuffer(
+          toMP4ArrayBuffer(
+            this.#initializationData!.buffer,
+            this.#isoFilePosition
+          )
+        );
+        this.#isoFilePosition += this.#initializationData!.byteLength;
       }
       this.#isoFile!.appendBuffer(
         toMP4ArrayBuffer(boxData, this.#isoFilePosition)
@@ -371,10 +392,6 @@ export class BabySourceBuffer extends EventTarget {
     // 1. For each coded frame in the media segment run the following steps:
     for (const trackBuffer of this.#trackBuffers) {
       this.#isoFile!.setExtractionOptions(trackBuffer.trackId, undefined, {});
-      // HACK: Do not use decode timestamp from previous sample when parsing a new movie fragment.
-      // See https://github.com/gpac/mp4box.js/blob/v0.5.2/src/isofile-sample-processing.js#L422
-      this.#isoFile!.getTrackById(trackBuffer.trackId).first_traf_merged =
-        false;
     }
     this.#isoFile!.onSamples = (trackId, _user, samples) =>
       this.#processSamples(trackId, samples);

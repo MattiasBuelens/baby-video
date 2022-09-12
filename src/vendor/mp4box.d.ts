@@ -99,6 +99,8 @@ declare module "mp4box" {
     flush(): void;
 
     onSamples?: (trackId: number, user: any, samples: Sample[]) => void;
+
+    releaseUsedSamples(trackId: number, sampleNum: number): void;
   }
 
   export interface Info {
@@ -154,7 +156,6 @@ declare module "mp4box" {
   export interface TrakBox extends Box {
     type: "trak";
     mdia: MdiaBox;
-    first_traf_merged?: boolean;
   }
 
   export interface MdiaBox extends Box {
