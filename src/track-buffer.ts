@@ -259,17 +259,3 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
     );
   }
 }
-
-function compareFrameByTimestamp(
-  left: EncodedChunk,
-  right: EncodedChunk
-): number {
-  return left.timestamp! - right.timestamp!;
-}
-
-function compareGopByStart(
-  left: GroupOfPictures,
-  right: GroupOfPictures
-): number {
-  return left.start - right.start;
-}
