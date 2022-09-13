@@ -1,5 +1,6 @@
 import { TimeRanges } from "./time-ranges";
 import { Sample } from "mp4box";
+import { insertSorted } from "./util";
 
 const BUFFERED_TOLERANCE: number = 1e-6;
 
@@ -95,8 +96,7 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
       data: sample.data,
       type: sample.is_sync ? "key" : "delta",
     });
-    this.#frames.push(frame);
-    this.#frames.sort(compareFrameByTimestamp);
+    insertSorted(this.#frames, frame, (x) => x.timestamp);
   }
 
   findFrameForTime(time: number): EncodedAudioChunk | undefined {
@@ -161,13 +161,13 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
       type: sample.is_sync ? "key" : "delta",
     });
     if (this.#currentGop === undefined || frame.type === "key") {
-      this.#currentGop = {
+      const gop: GroupOfPictures = {
         start: frame.timestamp,
         end: frame.timestamp + frame.duration!,
         frames: [frame],
       };
-      this.#gops.push(this.#currentGop);
-      this.#gops.sort(compareGopByStart);
+      this.#currentGop = gop;
+      insertSorted(this.#gops, gop, (x) => x.start);
     } else {
       this.#currentGop.end = Math.max(
         this.#currentGop.end,
