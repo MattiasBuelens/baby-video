@@ -397,24 +397,13 @@ export class BabyVideoElement extends HTMLElement {
     if (!videoTrackBuffer) {
       return;
     }
-    const frameAtTime = videoTrackBuffer.findFrameForTime(this.currentTime);
-    if (frameAtTime && this.#lastDecodingVideoFrame !== frameAtTime) {
-      const decodeQueue = videoTrackBuffer.getDecodeQueueForFrame(
-        frameAtTime,
-        this.#lastDecodingVideoFrame
-      );
-      if (
-        this.#videoDecoder.state === "unconfigured" ||
-        this.#lastVideoDecoderConfig !== decodeQueue.codecConfig
-      ) {
-        this.#videoDecoder.configure(decodeQueue.codecConfig);
-        this.#lastVideoDecoderConfig = decodeQueue.codecConfig;
-      }
-      this.#lastDecodingVideoFrame = frameAtTime;
-      for (const frame of decodeQueue.frames) {
-        this.#videoDecoder.decode(frame);
-        this.#decodingVideoFrames.push(frame);
-      }
+    if (this.#videoDecoder.state === "unconfigured") {
+      this.#videoDecoder.configure(videoTrackBuffer.codecConfig);
+    }
+    const frame = videoTrackBuffer.findFrameForTime(this.currentTime);
+    if (frame) {
+      this.#videoDecoder.decode(frame);
+      this.#decodingVideoFrames.push(frame);
     }
   }
 
@@ -502,7 +491,7 @@ export class BabyVideoElement extends HTMLElement {
     this.#lastDecodingVideoFrame = undefined;
     this.#decodingVideoFrames.length = 0;
     this.#decodedVideoFrames.length = 0;
-    this.#videoDecoder.reset();
+    // this.#videoDecoder.reset();
   }
 
   #isPotentiallyPlaying(): boolean {

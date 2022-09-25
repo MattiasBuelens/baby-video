@@ -15,7 +15,7 @@ export interface DecodeQueue {
 export abstract class TrackBuffer<T extends EncodedChunk = EncodedChunk> {
   readonly type: "audio" | "video";
   readonly trackId: number;
-  protected codecConfig: DecoderConfig;
+  codecConfig: DecoderConfig;
   lastDecodeTimestamp: number | undefined = undefined;
   lastFrameDuration: number | undefined = undefined;
   highestEndTimestamp: number | undefined = undefined;
@@ -100,7 +100,7 @@ export interface AudioDecodeQueue extends DecodeQueue {
 }
 
 export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
-  protected declare codecConfig: AudioDecoderConfig;
+  declare codecConfig: AudioDecoderConfig;
   #frames: EncodedAudioChunk[] = [];
 
   constructor(trackId: number, codecConfig: AudioDecoderConfig) {
@@ -173,7 +173,7 @@ interface GroupOfPictures {
 }
 
 export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
-  protected declare codecConfig: VideoDecoderConfig;
+  declare codecConfig: VideoDecoderConfig;
   #gops: Array<GroupOfPictures> = [];
   #currentGop: GroupOfPictures | undefined = undefined;
 
