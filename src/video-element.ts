@@ -401,7 +401,8 @@ export class BabyVideoElement extends HTMLElement {
       this.#videoDecoder.configure(videoTrackBuffer.codecConfig);
     }
     const frame = videoTrackBuffer.findFrameForTime(this.currentTime);
-    if (frame) {
+    if (frame && this.#lastDecodingVideoFrame !== frame) {
+      this.#lastDecodingVideoFrame = frame;
       this.#videoDecoder.decode(frame);
       this.#decodingVideoFrames.push(frame);
     }
