@@ -15,6 +15,7 @@ video.addEventListener("durationchange", logEvent);
 video.addEventListener("seeking", logEvent);
 video.addEventListener("seeked", logEvent);
 video.addEventListener("progress", logEvent);
+video.addEventListener("resize", logEvent);
 
 const mediaSource = new BabyMediaSource();
 video.srcObject = mediaSource;

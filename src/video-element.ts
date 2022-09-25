@@ -166,6 +166,14 @@ export class BabyVideoElement extends HTMLElement {
     }
   }
 
+  get videoWidth(): number {
+    return this.#canvas.width;
+  }
+
+  get videoHeight(): number {
+    return this.#canvas.height;
+  }
+
   play(): Promise<void> {
     // https://html.spec.whatwg.org/multipage/media.html#dom-media-play
     // 3. Let promise be a new promise and append promise to the list of pending play promises.
@@ -465,8 +473,7 @@ export class BabyVideoElement extends HTMLElement {
     });
     if (currentFrameIndex >= 0) {
       const frame = this.#decodedVideoFrames[currentFrameIndex];
-      this.#canvas.width = frame.displayWidth;
-      this.#canvas.height = frame.displayHeight;
+      this.#updateSize(frame.displayWidth, frame.displayHeight);
       this.#canvasContext.drawImage(
         frame,
         0,
@@ -591,6 +598,25 @@ export class BabyVideoElement extends HTMLElement {
       // Note: the first step is handled together with HAVE_FUTURE_DATA
       // The user agent must queue a media element task given the media element to fire an event named canplaythrough at the element.
       queueTask(() => this.dispatchEvent(new Event("canplaythrough")));
+    }
+  }
+
+  #updateSize(width: number, height: number): void {
+    const oldWidth = this.#canvas.width;
+    const oldHeight = this.#canvas.height;
+    this.#canvas.width = width;
+    this.#canvas.height = height;
+    // https://html.spec.whatwg.org/multipage/media.html#concept-video-intrinsic-width
+    // Whenever the intrinsic width or intrinsic height of the video changes
+    // (including, for example, because the selected video track was changed),
+    // if the element's readyState attribute is not HAVE_NOTHING,
+    // the user agent must queue a media element task given the media element
+    // to fire an event named resize at the media element.
+    if (
+      this.#readyState !== MediaReadyState.HAVE_NOTHING &&
+      (oldWidth !== width || oldHeight !== height)
+    ) {
+      queueTask(() => this.dispatchEvent(new Event("resize")));
     }
   }
 
