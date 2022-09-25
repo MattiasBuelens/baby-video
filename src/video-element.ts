@@ -53,6 +53,7 @@ export class BabyVideoElement extends HTMLElement {
   #seekAbortController: AbortController = new AbortController();
 
   readonly #videoDecoder: VideoDecoder;
+  #lastVideoDecoderConfig: VideoDecoderConfig | undefined = undefined;
   #lastDecodingVideoFrame: EncodedVideoChunk | undefined = undefined;
   #decodingVideoFrames: EncodedVideoChunk[] = [];
   #decodedVideoFrames: VideoFrame[] = [];
@@ -388,17 +389,21 @@ export class BabyVideoElement extends HTMLElement {
     if (!videoTrackBuffer) {
       return;
     }
-    if (this.#videoDecoder.state === "unconfigured") {
-      this.#videoDecoder.configure(videoTrackBuffer.codecConfig);
-    }
     const frameAtTime = videoTrackBuffer.findFrameForTime(this.currentTime);
     if (frameAtTime && this.#lastDecodingVideoFrame !== frameAtTime) {
       const decodeQueue = videoTrackBuffer.getDecodeQueueForFrame(
         frameAtTime,
         this.#lastDecodingVideoFrame
       );
+      if (
+        this.#videoDecoder.state === "unconfigured" ||
+        this.#lastVideoDecoderConfig !== decodeQueue.codecConfig
+      ) {
+        this.#videoDecoder.configure(decodeQueue.codecConfig);
+        this.#lastVideoDecoderConfig = decodeQueue.codecConfig;
+      }
       this.#lastDecodingVideoFrame = frameAtTime;
-      for (const frame of decodeQueue) {
+      for (const frame of decodeQueue.frames) {
         this.#videoDecoder.decode(frame);
         this.#decodingVideoFrames.push(frame);
       }
@@ -486,6 +491,7 @@ export class BabyVideoElement extends HTMLElement {
     for (const frame of this.#decodedVideoFrames) {
       frame.close();
     }
+    this.#lastVideoDecoderConfig = undefined;
     this.#lastDecodingVideoFrame = undefined;
     this.#decodingVideoFrames.length = 0;
     this.#decodedVideoFrames.length = 0;

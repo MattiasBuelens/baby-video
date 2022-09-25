@@ -5,11 +5,17 @@ import { insertSorted } from "./util";
 const BUFFERED_TOLERANCE: number = 1e-6;
 
 export type EncodedChunk = EncodedAudioChunk | EncodedVideoChunk;
+export type DecoderConfig = AudioDecoderConfig | VideoDecoderConfig;
+
+export interface DecodeQueue {
+  frames: EncodedChunk[];
+  codecConfig: DecoderConfig;
+}
 
 export abstract class TrackBuffer<T extends EncodedChunk = EncodedChunk> {
   readonly type: "audio" | "video";
   readonly trackId: number;
-  codecConfig: AudioDecoderConfig | VideoDecoderConfig;
+  protected codecConfig: DecoderConfig;
   lastDecodeTimestamp: number | undefined = undefined;
   lastFrameDuration: number | undefined = undefined;
   highestEndTimestamp: number | undefined = undefined;
@@ -19,7 +25,7 @@ export abstract class TrackBuffer<T extends EncodedChunk = EncodedChunk> {
   protected constructor(
     type: "audio" | "video",
     trackId: number,
-    codecConfig: AudioDecoderConfig | VideoDecoderConfig
+    codecConfig: DecoderConfig
   ) {
     this.type = type;
     this.trackId = trackId;
@@ -33,7 +39,7 @@ export abstract class TrackBuffer<T extends EncodedChunk = EncodedChunk> {
     this.needRandomAccessPoint = true;
   }
 
-  reconfigure(newConfig: AudioDecoderConfig | VideoDecoderConfig): void {
+  reconfigure(newConfig: DecoderConfig): void {
     this.codecConfig = newConfig;
   }
 
@@ -79,7 +85,7 @@ export abstract class TrackBuffer<T extends EncodedChunk = EncodedChunk> {
   abstract getDecodeQueueForFrame(
     frame: T,
     lastDecodedFrame: T | undefined
-  ): T[];
+  ): DecodeQueue;
 
   abstract getRandomAccessPointAtOrAfter(
     timeInMicros: number
@@ -88,8 +94,13 @@ export abstract class TrackBuffer<T extends EncodedChunk = EncodedChunk> {
   abstract removeSamples(startInMicros: number, endInMicros: number): void;
 }
 
+export interface AudioDecodeQueue extends DecodeQueue {
+  frames: EncodedAudioChunk[];
+  codecConfig: AudioDecoderConfig;
+}
+
 export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
-  declare codecConfig: AudioDecoderConfig;
+  protected declare codecConfig: AudioDecoderConfig;
   #frames: EncodedAudioChunk[] = [];
 
   constructor(trackId: number, codecConfig: AudioDecoderConfig) {
@@ -97,6 +108,7 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
   }
 
   protected addCodedFrame(sample: Sample): void {
+    // FIXME Store codecConfig
     const frame = new EncodedAudioChunk({
       timestamp: (1e6 * sample.cts) / sample.timescale,
       duration: (1e6 * sample.duration) / sample.timescale,
@@ -118,8 +130,11 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
   getDecodeQueueForFrame(
     frame: EncodedAudioChunk,
     _lastDecodedFrame: EncodedAudioChunk | undefined
-  ): EncodedAudioChunk[] {
-    return [frame];
+  ): AudioDecodeQueue {
+    return {
+      frames: [frame],
+      codecConfig: this.codecConfig,
+    };
   }
 
   getRandomAccessPointAtOrAfter(timeInMicros: number): number | undefined {
@@ -145,14 +160,20 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
   }
 }
 
+export interface VideoDecodeQueue extends DecodeQueue {
+  frames: EncodedVideoChunk[];
+  codecConfig: VideoDecoderConfig;
+}
+
 interface GroupOfPictures {
   start: number;
   end: number;
   frames: EncodedVideoChunk[];
+  codecConfig: VideoDecoderConfig;
 }
 
 export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
-  declare codecConfig: VideoDecoderConfig;
+  protected declare codecConfig: VideoDecoderConfig;
   #gops: Array<GroupOfPictures> = [];
   #currentGop: GroupOfPictures | undefined = undefined;
 
@@ -172,6 +193,7 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
         start: frame.timestamp,
         end: frame.timestamp + frame.duration!,
         frames: [frame],
+        codecConfig: this.codecConfig,
       };
       this.#currentGop = gop;
       insertSorted(this.#gops, gop, (x) => x.start);
@@ -212,7 +234,7 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
   getDecodeQueueForFrame(
     frame: EncodedVideoChunk,
     lastDecodedFrame: EncodedVideoChunk | undefined
-  ): EncodedVideoChunk[] {
+  ): VideoDecodeQueue {
     const containingGop = this.#gops.find((gop) => {
       return gop.frames.includes(frame);
     })!;
@@ -229,7 +251,10 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
         startIndex = lastDecodedFrameIndex + 1;
       }
     }
-    return containingGop.frames.slice(startIndex, endIndex + 1);
+    return {
+      frames: containingGop.frames.slice(startIndex, endIndex + 1),
+      codecConfig: containingGop.codecConfig,
+    };
   }
 
   getRandomAccessPointAtOrAfter(timeInMicros: number): number | undefined {
