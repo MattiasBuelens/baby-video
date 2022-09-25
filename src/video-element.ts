@@ -400,11 +400,17 @@ export class BabyVideoElement extends HTMLElement {
     if (this.#videoDecoder.state === "unconfigured") {
       this.#videoDecoder.configure(videoTrackBuffer.codecConfig);
     }
-    const frame = videoTrackBuffer.findFrameForTime(this.currentTime);
-    if (frame && this.#lastDecodingVideoFrame !== frame) {
-      this.#lastDecodingVideoFrame = frame;
-      this.#videoDecoder.decode(frame);
-      this.#decodingVideoFrames.push(frame);
+    const frameAtTime = videoTrackBuffer.findFrameForTime(this.currentTime);
+    if (frameAtTime && this.#lastDecodingVideoFrame !== frameAtTime) {
+      const decodeQueue = videoTrackBuffer.getDecodeQueueForFrame(
+        frameAtTime,
+        this.#lastDecodingVideoFrame
+      );
+      this.#lastDecodingVideoFrame = frameAtTime;
+      for (const frame of decodeQueue.frames) {
+        this.#videoDecoder.decode(frame);
+        this.#decodingVideoFrames.push(frame);
+      }
     }
   }
 
