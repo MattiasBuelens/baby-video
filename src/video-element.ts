@@ -57,6 +57,7 @@ export class BabyVideoElement extends HTMLElement {
   #lastDecodingVideoFrame: EncodedVideoChunk | undefined = undefined;
   #decodingVideoFrames: EncodedVideoChunk[] = [];
   #decodedVideoFrames: VideoFrame[] = [];
+  #nextDecodedFramePromise: Deferred<void> | undefined = undefined;
   #nextRenderFrame: number = 0;
 
   constructor() {
@@ -273,7 +274,7 @@ export class BabyVideoElement extends HTMLElement {
   }
 
   #updatePlaying(): void {
-    if (this.#isPotentiallyPlaying()) {
+    if (this.#isPotentiallyPlaying() && !this.#seeking) {
       if (this.#advanceLoop === 0) {
         this.#lastAdvanceTime = performance.now();
         this.#advanceLoop = requestAnimationFrame((now) => {
@@ -290,7 +291,7 @@ export class BabyVideoElement extends HTMLElement {
     // When a media element is potentially playing and its Document is a fully active Document,
     // its current playback position must increase monotonically at the element's playbackRate units
     // of media time per unit time of the media timeline's clock.
-    if (this.#isPotentiallyPlaying()) {
+    if (this.#isPotentiallyPlaying() && !this.#seeking) {
       const newTime =
         this.#currentTime + Math.max(0, now - this.#lastAdvanceTime) / 1000;
       // Do not advance past end of current buffered range.
@@ -313,7 +314,7 @@ export class BabyVideoElement extends HTMLElement {
     this.#updateCurrentTime(this.#getCurrentPlaybackPosition(now));
     this.#lastAdvanceTime = now;
     this.#timeMarchesOn(true, now);
-    if (this.#isPotentiallyPlaying()) {
+    if (this.#isPotentiallyPlaying() && !this.#seeking) {
       this.#advanceLoop = requestAnimationFrame((now) =>
         this.#advanceCurrentTime(now)
       );
@@ -365,27 +366,52 @@ export class BabyVideoElement extends HTMLElement {
     // 12. Wait until the user agent has established whether or not the media data for the new playback position
     //     is available, and, if it is, until it has decoded enough data to play back that position.
     this.#seekAbortController = new AbortController();
-    this.#waitForSeekToComplete(this.#seekAbortController.signal).catch(
-      () => {}
-    );
+    this.#waitForSeekToComplete(
+      1e6 * newPosition,
+      this.#seekAbortController.signal
+    ).catch(() => {});
   }
 
-  async #waitForSeekToComplete(signal: AbortSignal): Promise<void> {
+  async #waitForSeekToComplete(
+    timeInMicros: number,
+    signal: AbortSignal
+  ): Promise<void> {
     // https://html.spec.whatwg.org/multipage/media.html#dom-media-seek
     // 12. Wait until the user agent has established whether or not the media data for the new playback position
     //     is available, and, if it is, until it has decoded enough data to play back that position.
-    while (this.#readyState <= MediaReadyState.HAVE_CURRENT_DATA) {
-      await waitForEvent(this, "canplay", signal);
+    while (true) {
+      if (this.#readyState <= MediaReadyState.HAVE_CURRENT_DATA) {
+        await waitForEvent(this, "canplay", signal);
+      } else if (!this.#hasDecodedFrameAtTime(timeInMicros)) {
+        await this.#waitForNextDecodedFrame(signal);
+      } else {
+        break;
+      }
     }
     // 13. Await a stable state.
     // 14. Set the seeking IDL attribute to false.
     this.#seeking = false;
+    this.#updatePlaying();
     // 15. Run the time marches on steps.
     this.#timeMarchesOn(false, performance.now());
     // 16. Queue a media element task given the media element to fire an event named timeupdate at the element.
     queueTask(() => this.dispatchEvent(new Event("timeupdate")));
     // 17. Queue a media element task given the media element to fire an event named seeked at the element.
     queueTask(() => this.dispatchEvent(new Event("seeked")));
+  }
+
+  #hasDecodedFrameAtTime(timeInMicros: number): boolean {
+    return this.#decodedVideoFrames.some(
+      (frame) =>
+        frame.timestamp! <= timeInMicros &&
+        timeInMicros < frame.timestamp! + frame.duration!
+    );
+  }
+
+  async #waitForNextDecodedFrame(signal: AbortSignal): Promise<void> {
+    this.#nextDecodedFramePromise = new Deferred<void>();
+    this.#nextDecodedFramePromise.follow(signal);
+    await this.#nextDecodedFramePromise.promise;
   }
 
   #decodeVideoFrames(): void {
@@ -445,6 +471,10 @@ export class BabyVideoElement extends HTMLElement {
     frame.close();
     frame = newFrame;
     this.#decodedVideoFrames.push(newFrame);
+    if (this.#nextDecodedFramePromise) {
+      this.#nextDecodedFramePromise.resolve();
+      this.#nextDecodedFramePromise = undefined;
+    }
     if (this.#nextRenderFrame === 0) {
       this.#nextRenderFrame = requestAnimationFrame(() =>
         this.#renderVideoFrame()

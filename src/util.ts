@@ -28,6 +28,9 @@ export function waitForEvent(
   signal?: AbortSignal
 ): Promise<Event> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      return reject(signal.reason);
+    }
     const listener = (event: Event) => {
       signal?.removeEventListener("abort", abortListener);
       resolve(event);
@@ -36,7 +39,7 @@ export function waitForEvent(
       reject(signal!.reason);
     };
     target.addEventListener(type, listener, { once: true, signal });
-    signal?.addEventListener("abort", abortListener);
+    signal?.addEventListener("abort", abortListener, { once: true });
   });
 }
 
@@ -93,6 +96,7 @@ export class Deferred<T> {
   readonly promise: Promise<T>;
   #resolve?: (value: T) => void;
   #reject?: (reason: any) => void;
+  #followedSignals: AbortSignal[] = [];
 
   constructor() {
     this.promise = new Promise<T>((resolve, reject) => {
@@ -103,11 +107,31 @@ export class Deferred<T> {
 
   resolve(value: T) {
     this.#resolve?.(value);
-    this.#resolve = this.#reject = undefined;
+    this.#cleanup();
   }
 
   reject(reason: any) {
     this.#reject?.(reason);
-    this.#resolve = this.#reject = undefined;
+    this.#cleanup();
   }
+
+  follow(signal: AbortSignal): void {
+    if (signal.aborted) {
+      return this.reject(signal.reason);
+    }
+    signal.addEventListener("abort", this.#handleAbort, { once: true });
+    this.#followedSignals.push(signal);
+  }
+
+  #cleanup(): void {
+    this.#resolve = this.#reject = undefined;
+    for (const signal of this.#followedSignals) {
+      signal.removeEventListener("abort", this.#handleAbort);
+    }
+    this.#followedSignals.length = 0;
+  }
+
+  readonly #handleAbort = (event: Event) => {
+    this.reject((event.target as AbortSignal).reason);
+  };
 }
