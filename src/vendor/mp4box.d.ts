@@ -118,6 +118,7 @@ declare module "mp4box" {
   }
 
   export interface TrackInfo {
+    type: "audio" | "video";
     id: number;
     name: string;
     created: Date;

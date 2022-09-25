@@ -7,6 +7,7 @@ const BUFFERED_TOLERANCE: number = 1e-6;
 export type EncodedChunk = EncodedAudioChunk | EncodedVideoChunk;
 
 export abstract class TrackBuffer<T extends EncodedChunk = EncodedChunk> {
+  readonly type: "audio" | "video";
   readonly trackId: number;
   codecConfig: AudioDecoderConfig | VideoDecoderConfig;
   lastDecodeTimestamp: number | undefined = undefined;
@@ -16,9 +17,11 @@ export abstract class TrackBuffer<T extends EncodedChunk = EncodedChunk> {
   trackBufferRanges: TimeRanges = new TimeRanges([]);
 
   protected constructor(
+    type: "audio" | "video",
     trackId: number,
     codecConfig: AudioDecoderConfig | VideoDecoderConfig
   ) {
+    this.type = type;
     this.trackId = trackId;
     this.codecConfig = codecConfig;
   }
@@ -28,6 +31,10 @@ export abstract class TrackBuffer<T extends EncodedChunk = EncodedChunk> {
     this.lastFrameDuration = undefined;
     this.highestEndTimestamp = undefined;
     this.needRandomAccessPoint = true;
+  }
+
+  reconfigure(newConfig: AudioDecoderConfig | VideoDecoderConfig): void {
+    this.codecConfig = newConfig;
   }
 
   addSample(sample: Sample): void {
@@ -86,7 +93,7 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
   #frames: EncodedAudioChunk[] = [];
 
   constructor(trackId: number, codecConfig: AudioDecoderConfig) {
-    super(trackId, codecConfig);
+    super("audio", trackId, codecConfig);
   }
 
   protected addCodedFrame(sample: Sample): void {
@@ -150,7 +157,7 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
   #currentGop: GroupOfPictures | undefined = undefined;
 
   constructor(trackId: number, codecConfig: VideoDecoderConfig) {
-    super(trackId, codecConfig);
+    super("video", trackId, codecConfig);
   }
 
   protected addCodedFrame(sample: Sample): void {
@@ -179,6 +186,11 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
 
   requireRandomAccessPoint(): void {
     super.requireRandomAccessPoint();
+    this.#currentGop = undefined;
+  }
+
+  reconfigure(newConfig: VideoDecoderConfig): void {
+    super.reconfigure(newConfig);
     this.#currentGop = undefined;
   }
 

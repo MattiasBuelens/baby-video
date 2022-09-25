@@ -11,6 +11,7 @@ import {
   MP4ArrayBuffer,
   MP4BoxStream,
   Sample,
+  TrackInfo,
   TrakBox,
   VideoTrackInfo,
 } from "mp4box";
@@ -222,7 +223,6 @@ export class BabySourceBuffer extends EventTarget {
     if (boxType === "ftyp") {
       this.#initializationData = new Uint8Array(boxData);
       this.#isoFile = undefined;
-      this.#mp4Info = undefined;
     } else if (boxType === "moov") {
       // 5.2. Run the initialization segment received algorithm.
       this.#initializationData = concatUint8Arrays(
@@ -238,8 +238,9 @@ export class BabySourceBuffer extends EventTarget {
         )
       );
       this.#isoFilePosition += boxData.byteLength;
-      this.#mp4Info = this.#isoFile!.getInfo();
-      await this.#initializationSegmentReceived(this.#mp4Info);
+      const newInfo = this.#isoFile!.getInfo();
+      await this.#initializationSegmentReceived(newInfo);
+      this.#mp4Info = newInfo;
     } else if (boxType === "moof" || boxType === "mdat") {
       // 6.1. If the [[first initialization segment received flag]] is false
       //      or the [[pending initialization segment for changeType flag]] is true,
@@ -273,7 +274,7 @@ export class BabySourceBuffer extends EventTarget {
   }
 
   async #initializationSegmentReceived(info: Info): Promise<void> {
-    // https://w3c.github.io/media-source/#dfn-initialization-segment-received
+    // https://w3c.github.io/media-source/#sourcebuffer-init-segment-received
     // 1. Update the duration attribute if it currently equals NaN
     if (Number.isNaN(this.#parent.duration)) {
       if (info.duration > 0) {
@@ -296,7 +297,65 @@ export class BabySourceBuffer extends EventTarget {
     // 3. If the [[first initialization segment received flag]] is true,
     //    then run the following steps:
     if (this.#firstInitializationSegmentReceived) {
-      // TODO Update track buffers
+      // 3.1. Verify the following properties. If any of the checks fail
+      //      then run the append error algorithm and abort these steps.
+      const oldInfo = this.#mp4Info!;
+      // * The number of audio, video, and text tracks match what was
+      //   in the first initialization segment.
+      if (
+        info.audioTracks.length !== oldInfo.audioTracks.length ||
+        info.videoTracks.length !== oldInfo.videoTracks.length
+      ) {
+        this.#appendError();
+        return;
+      }
+      // * If more than one track for a single type are present (e.g., 2 audio tracks),
+      //   then the Track IDs match the ones in the first initialization segment.
+      if (
+        (info.audioTracks.length > 1 &&
+          !hasMatchingTrackIds(info.audioTracks, oldInfo.audioTracks)) ||
+        (info.videoTracks.length > 1 &&
+          !hasMatchingTrackIds(info.videoTracks, oldInfo.videoTracks))
+      ) {
+        this.#appendError();
+        return;
+      }
+      // * The codecs for each track are supported by the user agent.
+      const audioTrackConfigs = info.audioTracks.map(buildAudioConfig);
+      const videoTrackConfigs = info.videoTracks.map((trackInfo) =>
+        buildVideoConfig(trackInfo, this.#isoFile!.getTrackById(trackInfo.id))
+      );
+      for (const audioTrackConfig of audioTrackConfigs) {
+        const support = await AudioDecoder.isConfigSupported(audioTrackConfig);
+        if (!support.supported) {
+          this.#appendError();
+          return;
+        }
+      }
+      for (const videoTrackConfig of videoTrackConfigs) {
+        const support = await VideoDecoder.isConfigSupported(videoTrackConfig);
+        if (!support.supported) {
+          this.#appendError();
+          return;
+        }
+      }
+      // 3.2. Add the appropriate track descriptions from this initialization segment to each of the track buffers.
+      for (let i = 0; i < info.audioTracks.length; i++) {
+        const audioTrackInfo = info.audioTracks[i];
+        const audioTrackConfig = audioTrackConfigs[i];
+        const trackBuffer = this.#getMatchingTrackBuffer(audioTrackInfo)!;
+        trackBuffer.reconfigure(audioTrackConfig);
+      }
+      for (let i = 0; i < info.videoTracks.length; i++) {
+        const videoTrackInfo = info.videoTracks[i];
+        const videoTrackConfig = videoTrackConfigs[i];
+        const trackBuffer = this.#getMatchingTrackBuffer(videoTrackInfo)!;
+        trackBuffer.reconfigure(videoTrackConfig);
+      }
+      // 3.3. Set the need random access point flag on all track buffers to true.
+      for (const trackBuffer of this.#trackBuffers) {
+        trackBuffer.needRandomAccessPoint = true;
+      }
     }
     // 4. Let active track flag equal false.
     let activeTrack = false;
@@ -385,6 +444,15 @@ export class BabySourceBuffer extends EventTarget {
         }
       }
     }
+  }
+
+  #getMatchingTrackBuffer(track: AudioTrackInfo): AudioTrackBuffer | undefined;
+  #getMatchingTrackBuffer(track: VideoTrackInfo): VideoTrackBuffer | undefined;
+  #getMatchingTrackBuffer(track: TrackInfo): TrackBuffer | undefined {
+    return (
+      this.#trackBuffers.find((buffer) => buffer.trackId === track.id) ??
+      this.#trackBuffers.find((buffer) => buffer.type === track.type)
+    );
   }
 
   #codedFrameProcessing(): void {
@@ -630,4 +698,13 @@ function createAvcDecoderConfigurationRecord(
   const stream = new DataStream(undefined, 0, DataStream.BIG_ENDIAN);
   avcC.write(stream);
   return new Uint8Array(stream.buffer, 8); // remove the box header
+}
+
+function hasMatchingTrackIds(
+  newTracks: readonly TrackInfo[],
+  oldTracks: readonly TrackInfo[]
+): boolean {
+  return newTracks.every((newTrack) =>
+    oldTracks.some((oldTrack) => newTrack.id === oldTrack.id)
+  );
 }
