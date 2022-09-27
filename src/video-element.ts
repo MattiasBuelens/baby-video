@@ -425,7 +425,7 @@ export class BabyVideoElement extends HTMLElement {
     }
     const frameAtTime = videoTrackBuffer.findFrameForTime(this.currentTime);
     if (frameAtTime && this.#lastDecodingVideoFrame !== frameAtTime) {
-      const decodeQueue = videoTrackBuffer.getDecodeQueueForFrame(
+      const decodeQueue = videoTrackBuffer.getDecodeDependenciesForFrame(
         frameAtTime,
         this.#lastDecodingVideoFrame
       );

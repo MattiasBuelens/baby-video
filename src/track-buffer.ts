@@ -82,7 +82,7 @@ export abstract class TrackBuffer<T extends EncodedChunk = EncodedChunk> {
 
   abstract findFrameForTime(time: number): T | undefined;
 
-  abstract getDecodeQueueForFrame(
+  abstract getDecodeDependenciesForFrame(
     frame: T,
     lastDecodedFrame: T | undefined
   ): DecodeQueue;
@@ -127,7 +127,7 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
     );
   }
 
-  getDecodeQueueForFrame(
+  getDecodeDependenciesForFrame(
     frame: EncodedAudioChunk,
     _lastDecodedFrame: EncodedAudioChunk | undefined
   ): AudioDecodeQueue {
@@ -231,7 +231,7 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
     );
   }
 
-  getDecodeQueueForFrame(
+  getDecodeDependenciesForFrame(
     frame: EncodedVideoChunk,
     lastDecodedFrame: EncodedVideoChunk | undefined
   ): VideoDecodeQueue {
