@@ -490,6 +490,8 @@ export class BabyVideoElement extends HTMLElement {
       currentTimeInMicros
     ) {
       frame.close();
+      // Decode more frames (if we now have more space in the queue)
+      this.#decodeVideoFrames();
       return;
     }
     // Note: Chrome does not yet copy EncodedVideoChunk.duration to VideoFrame.duration
@@ -508,6 +510,8 @@ export class BabyVideoElement extends HTMLElement {
         this.#renderVideoFrame()
       );
     }
+    // Decode more frames (if we now have more space in the queue)
+    this.#decodeVideoFrames();
   }
 
   #renderVideoFrame(): void {
@@ -550,6 +554,8 @@ export class BabyVideoElement extends HTMLElement {
     } else {
       this.#nextRenderFrame = 0;
     }
+    // Decode more frames (if we now have more space in the queue)
+    this.#decodeVideoFrames();
   }
 
   #resetVideoDecoder(): void {
