@@ -9,6 +9,7 @@ import {
 } from "./media-source";
 import { Deferred, queueTask, waitForEvent } from "./util";
 import { TimeRanges } from "./time-ranges";
+import { VideoDecodeQueue } from "./track-buffer";
 
 const template = document.createElement("template");
 template.innerHTML = `<style>${stylesheet}</style>`;
@@ -30,6 +31,8 @@ export let updateReadyState: (
   newReadyState: MediaReadyState
 ) => void;
 export let notifyProgress: (videoElement: BabyVideoElement) => void;
+
+const maxDecodeQueueSize = 10;
 
 export class BabyVideoElement extends HTMLElement {
   readonly #canvas: HTMLCanvasElement;
@@ -423,25 +426,50 @@ export class BabyVideoElement extends HTMLElement {
     if (!videoTrackBuffer) {
       return;
     }
-    const frameAtTime = videoTrackBuffer.findFrameForTime(this.currentTime);
-    if (frameAtTime && this.#lastDecodingVideoFrame !== frameAtTime) {
-      const decodeQueue = videoTrackBuffer.getDecodeDependenciesForFrame(
-        frameAtTime,
-        this.#lastDecodingVideoFrame
+    // Decode frames for current time
+    if (this.#lastDecodingVideoFrame === undefined) {
+      const frameAtTime = videoTrackBuffer.findFrameForTime(this.currentTime);
+      if (frameAtTime === undefined) {
+        return;
+      }
+      this.#processDecodeQueue(
+        videoTrackBuffer.getDecodeDependenciesForFrame(
+          frameAtTime,
+          this.#lastDecodingVideoFrame
+        )
       );
-      if (
-        this.#videoDecoder.state === "unconfigured" ||
-        this.#lastVideoDecoderConfig !== decodeQueue.codecConfig
-      ) {
-        this.#videoDecoder.configure(decodeQueue.codecConfig);
-        this.#lastVideoDecoderConfig = decodeQueue.codecConfig;
-      }
-      this.#lastDecodingVideoFrame = frameAtTime;
-      for (const frame of decodeQueue.frames) {
-        this.#videoDecoder.decode(frame);
-        this.#decodingVideoFrames.push(frame);
-      }
     }
+    // Decode next frames in advance
+    while (
+      this.#decodingVideoFrames.length + this.#decodedVideoFrames.length <
+      maxDecodeQueueSize
+    ) {
+      const nextQueue = videoTrackBuffer.getNextFrames(
+        this.#lastDecodingVideoFrame!,
+        maxDecodeQueueSize -
+          (this.#decodingVideoFrames.length + this.#decodedVideoFrames.length)
+      );
+      if (nextQueue === undefined) {
+        break;
+      }
+      this.#processDecodeQueue(nextQueue);
+    }
+  }
+
+  #processDecodeQueue(decodeQueue: VideoDecodeQueue): void {
+    if (
+      this.#videoDecoder.state === "unconfigured" ||
+      this.#lastVideoDecoderConfig !== decodeQueue.codecConfig
+    ) {
+      this.#videoDecoder.configure(decodeQueue.codecConfig);
+      this.#lastVideoDecoderConfig = decodeQueue.codecConfig;
+    }
+    for (const frame of decodeQueue.frames) {
+      this.#videoDecoder.decode(frame);
+      this.#decodingVideoFrames.push(frame);
+    }
+    this.#lastDecodingVideoFrame =
+      decodeQueue.frames[decodeQueue.frames.length - 1];
   }
 
   #onVideoFrame(frame: VideoFrame): void {

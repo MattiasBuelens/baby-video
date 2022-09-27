@@ -87,6 +87,8 @@ export abstract class TrackBuffer<T extends EncodedChunk = EncodedChunk> {
     lastDecodedFrame: T | undefined
   ): DecodeQueue;
 
+  abstract getNextFrames(frame: T, maxAmount: number): DecodeQueue | undefined;
+
   abstract getRandomAccessPointAtOrAfter(
     timeInMicros: number
   ): number | undefined;
@@ -133,6 +135,20 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
   ): AudioDecodeQueue {
     return {
       frames: [frame],
+      codecConfig: this.codecConfig,
+    };
+  }
+
+  getNextFrames(
+    frame: EncodedAudioChunk,
+    maxAmount: number
+  ): DecodeQueue | undefined {
+    const start = this.#frames.indexOf(frame);
+    if (start < 0 || start === this.#frames.length - 1) {
+      return undefined;
+    }
+    return {
+      frames: this.#frames.slice(start + 1, start + 1 + maxAmount),
       codecConfig: this.codecConfig,
     };
   }
@@ -254,6 +270,36 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
     return {
       frames: containingGop.frames.slice(startIndex, endIndex + 1),
       codecConfig: containingGop.codecConfig,
+    };
+  }
+
+  getNextFrames(
+    frame: EncodedVideoChunk,
+    maxAmount: number
+  ): DecodeQueue | undefined {
+    let gopIndex = this.#gops.findIndex((gop) => {
+      return gop.frames.includes(frame);
+    })!;
+    if (gopIndex < 0) {
+      return undefined;
+    }
+    let containingGop = this.#gops[gopIndex];
+    let frameIndex = containingGop.frames.indexOf(frame);
+    let nextGop: GroupOfPictures;
+    let nextIndex: number;
+    if (frameIndex < containingGop.frames.length - 1) {
+      nextGop = containingGop;
+      nextIndex = frameIndex + 1;
+    } else {
+      nextGop = this.#gops[gopIndex + 1];
+      nextIndex = 0;
+      if (!nextGop || Math.abs(nextGop.start - containingGop.end) > 1) {
+        return undefined;
+      }
+    }
+    return {
+      frames: nextGop.frames.slice(nextIndex, nextIndex + maxAmount),
+      codecConfig: nextGop.codecConfig,
     };
   }
 
