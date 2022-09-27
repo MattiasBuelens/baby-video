@@ -32,7 +32,10 @@ export let updateReadyState: (
 ) => void;
 export let notifyProgress: (videoElement: BabyVideoElement) => void;
 
-const maxDecodeQueueSize = 10;
+// Low and high watermark for decode queue
+// If the queue drops below the LWM, we try to fill it with up to HWM new frames
+const decodeQueueLwm = 3;
+const decodeQueueHwm = 10;
 
 export class BabyVideoElement extends HTMLElement {
   readonly #canvas: HTMLCanvasElement;
@@ -444,11 +447,11 @@ export class BabyVideoElement extends HTMLElement {
     // Decode next frames in advance
     while (
       this.#decodingVideoFrames.length + this.#decodedVideoFrames.length <
-      maxDecodeQueueSize
+      decodeQueueLwm
     ) {
       const nextQueue = videoTrackBuffer.getNextFrames(
         this.#lastDecodingVideoFrame!,
-        maxDecodeQueueSize -
+        decodeQueueHwm -
           (this.#decodingVideoFrames.length + this.#decodedVideoFrames.length)
       );
       if (nextQueue === undefined) {
