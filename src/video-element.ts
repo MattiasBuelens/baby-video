@@ -61,6 +61,7 @@ export class BabyVideoElement extends HTMLElement {
   #decodingVideoFrames: EncodedVideoChunk[] = [];
   #decodedVideoFrames: VideoFrame[] = [];
   #nextDecodedFramePromise: Deferred<void> | undefined = undefined;
+  #lastRenderedFrame: number | undefined = undefined;
   #nextRenderFrame: number = 0;
 
   constructor() {
@@ -315,6 +316,7 @@ export class BabyVideoElement extends HTMLElement {
 
   #advanceCurrentTime(now: number): void {
     this.#updateCurrentTime(this.#getCurrentPlaybackPosition(now));
+    this.#renderVideoFrame();
     this.#lastAdvanceTime = now;
     this.#timeMarchesOn(true, now);
     if (this.#isPotentiallyPlaying() && !this.#seeking) {
@@ -505,7 +507,8 @@ export class BabyVideoElement extends HTMLElement {
       this.#nextDecodedFramePromise.resolve();
       this.#nextDecodedFramePromise = undefined;
     }
-    if (this.#nextRenderFrame === 0) {
+    // Schedule render immediately if this is the first decoded frame after a seek
+    if (this.#lastRenderedFrame === undefined && this.#nextRenderFrame === 0) {
       this.#nextRenderFrame = requestAnimationFrame(() =>
         this.#renderVideoFrame()
       );
@@ -515,6 +518,7 @@ export class BabyVideoElement extends HTMLElement {
   }
 
   #renderVideoFrame(): void {
+    this.#nextRenderFrame = 0;
     const currentTimeInMicros = 1e6 * this.#currentTime;
     // Drop all frames that are before current time, since we're too late to render them.
     let nbOfDroppedFrames = 0;
@@ -543,16 +547,9 @@ export class BabyVideoElement extends HTMLElement {
         frame.displayWidth,
         frame.displayHeight
       );
-      frame.close();
       this.#decodedVideoFrames.splice(currentFrameIndex, 1);
-    }
-    // Schedule the next render.
-    if (this.#decodedVideoFrames.length > 0 && this.#isPotentiallyPlaying()) {
-      this.#nextRenderFrame = requestAnimationFrame(() =>
-        this.#renderVideoFrame()
-      );
-    } else {
-      this.#nextRenderFrame = 0;
+      this.#lastRenderedFrame = frame.timestamp!;
+      frame.close();
     }
     // Decode more frames (if we now have more space in the queue)
     this.#decodeVideoFrames();
@@ -564,6 +561,7 @@ export class BabyVideoElement extends HTMLElement {
     }
     this.#lastVideoDecoderConfig = undefined;
     this.#lastDecodingVideoFrame = undefined;
+    this.#lastRenderedFrame = undefined;
     this.#decodingVideoFrames.length = 0;
     this.#decodedVideoFrames.length = 0;
     this.#videoDecoder.reset();
