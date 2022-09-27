@@ -507,6 +507,9 @@ export class BabySourceBuffer extends EventTarget {
     // 1. For each coded frame in the media segment run the following steps:
     for (let i = 0; i < samples.length; i++) {
       const sample = samples[i];
+      // 1.1. Let presentation timestamp be a double precision floating point representation
+      //      of the coded frame's presentation timestamp in seconds.
+      const pts = sample.cts / sample.timescale;
       // 1.2. Let decode timestamp be a double precision floating point representation
       //      of the coded frame's decode timestamp in seconds.
       const dts = sample.dts / sample.timescale;
@@ -535,6 +538,9 @@ export class BabySourceBuffer extends EventTarget {
         i--;
         continue;
       }
+      // 7. Let frame end timestamp equal the sum of presentation timestamp and frame duration.
+      const frameEndTimestamp =
+        (sample.cts + sample.duration) / sample.timescale;
       // TODO 8 and 9 appendWindowStart and appendWindowEnd
       // 10. If the need random access point flag on track buffer equals true,
       //     then run the following steps:
@@ -547,7 +553,51 @@ export class BabySourceBuffer extends EventTarget {
         // 10.2. Set the need random access point flag on track buffer to false.
         trackBuffer.needRandomAccessPoint = false;
       }
-      // TODO 11 to 15 Remove overlapping frames
+      // TODO Steps 11 to 12: Audio frame splicing
+      // 13. If last decode timestamp for track buffer is unset and presentation timestamp
+      //     falls within the presentation interval of a coded frame in track buffer,
+      //     then run the following steps:
+      // 13.1. Let overlapped frame be the coded frame in track buffer that matches the condition above.
+      if (trackBuffer.lastDecodeTimestamp === undefined) {
+        const overlappedFrame = trackBuffer.findFrameForTime(pts);
+        if (overlappedFrame !== undefined) {
+          // 13.2. If track buffer contains audio coded frames:
+          // TODO Audio frame splicing
+          // 13.2. If track buffer contains video coded frames:
+          if (trackBuffer.type === "video") {
+            // 1. Let remove window timestamp equal the overlapped frame presentation timestamp
+            //    plus 1 microsecond.
+            const removeWindowTimestamp = overlappedFrame.timestamp! + 1;
+            // 2. If the presentation timestamp is less than the remove window timestamp,
+            //   then remove overlapped frame from track buffer.
+            if (1e6 * pts < removeWindowTimestamp) {
+              trackBuffer.removeSamples(
+                overlappedFrame.timestamp!,
+                removeWindowTimestamp
+              );
+            }
+          }
+        }
+      }
+      // 14. Remove existing coded frames in track buffer:
+      if (trackBuffer.highestEndTimestamp === undefined) {
+        // * If highest end timestamp for track buffer is not set:
+        //   Remove all coded frames from track buffer that have a presentation timestamp
+        //   greater than or equal to presentation timestamp and less than frame end timestamp.
+        trackBuffer.removeSamples(1e6 * pts, 1e6 * frameEndTimestamp);
+      } else if (trackBuffer.highestEndTimestamp <= pts) {
+        // * If highest end timestamp for track buffer is set and less than or equal to presentation timestamp:
+        //   Remove all coded frames from track buffer that have a presentation timestamp
+        //   greater than or equal to highest end timestamp and less than frame end timestamp.
+        trackBuffer.removeSamples(
+          1e6 * trackBuffer.highestEndTimestamp,
+          1e6 * frameEndTimestamp
+        );
+      }
+      // 15. Remove all possible decoding dependencies on the coded frames removed in the previous two steps
+      //     by removing all coded frames from track buffer between those frames removed in the previous two steps
+      //     and the next random access point after those removed frames.
+      // Note: already handled by removeSamples()
       // Steps 16 to 19
       trackBuffer.addSample(sample);
     }
