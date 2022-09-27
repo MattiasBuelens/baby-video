@@ -143,12 +143,13 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
     frame: EncodedAudioChunk,
     maxAmount: number
   ): DecodeQueue | undefined {
-    const start = this.#frames.indexOf(frame);
-    if (start < 0 || start === this.#frames.length - 1) {
+    const frameIndex = this.#frames.indexOf(frame);
+    if (frameIndex < 0 || frameIndex === this.#frames.length - 1) {
       return undefined;
     }
+    const nextIndex = frameIndex + 1;
     return {
-      frames: this.#frames.slice(start + 1, start + 1 + maxAmount),
+      frames: this.#frames.slice(nextIndex, nextIndex + maxAmount),
       codecConfig: this.codecConfig,
     };
   }
