@@ -1,5 +1,6 @@
 import "media-chrome";
 import { BabyMediaSource, BabyVideoElement } from "../src/index";
+import { TimeRanges } from "../src/time-ranges";
 import { waitForEvent } from "../src/util";
 
 const video = document.querySelector<BabyVideoElement>("baby-video")!;
@@ -73,13 +74,20 @@ async function bufferLoop(signal: AbortSignal) {
   await pendingBufferLoop;
   while (true) {
     if (signal.aborted) throw signal.reason;
-    const currentTime = video.currentTime;
-    const currentRange = video.buffered.find(currentTime);
-    const nextTime = currentRange ? currentRange[1] : currentTime;
+    const currentRange = video.buffered.find(video.currentTime);
+    const nextTime = currentRange ? currentRange[1] : video.currentTime;
     const nextSegment = getSegmentForTime(nextTime)!;
     // Wait for current time to reach end of its buffer
     while (nextSegment.startTime - video.currentTime > 20) {
       await waitForEvent(video, "timeupdate", signal);
+    }
+    // Remove old buffer before/after current time
+    const oldBuffered = video.buffered.subtract(
+      new TimeRanges([[video.currentTime - 10, video.currentTime + 30]])
+    );
+    for (let i = 0; i < oldBuffered.length; i++) {
+      sourceBuffer.remove(oldBuffered.start(i), oldBuffered.end(i));
+      await waitForEvent(sourceBuffer, "updateend");
     }
     // Append next segment
     const segmentData = await (
