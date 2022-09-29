@@ -260,8 +260,9 @@ export class BabyMediaSource extends EventTarget {
     }
     const buffered = this.#getBuffered();
     const currentTime = mediaElement.currentTime;
+    const currentRange = buffered.find(currentTime);
     // If HTMLMediaElement.buffered does not contain a TimeRanges for the current playback position:
-    if (!buffered.contains(currentTime)) {
+    if (currentRange === undefined) {
       // Set the HTMLMediaElement.readyState attribute to HAVE_METADATA.
       updateReadyState(mediaElement, MediaReadyState.HAVE_METADATA);
       // Abort these steps.
@@ -269,7 +270,13 @@ export class BabyMediaSource extends EventTarget {
     }
     // If HTMLMediaElement.buffered contains a TimeRanges that includes the current playback position
     // and enough data to ensure uninterrupted playback:
-    // TODO
+    if (this.#readyState === "ended" && currentRange[1] === this.#duration) {
+      // Set the HTMLMediaElement.readyState attribute to HAVE_ENOUGH_DATA.
+      // Playback may resume at this point if it was previously suspended by a transition to HAVE_CURRENT_DATA.
+      updateReadyState(mediaElement, MediaReadyState.HAVE_ENOUGH_DATA);
+      // Abort these steps.
+      return;
+    }
     // If HTMLMediaElement.buffered contains a TimeRanges that includes the current playback position
     // and some time beyond the current playback position, then run the following steps:
     if (buffered.containsRange(currentTime, currentTime + 0.1)) {

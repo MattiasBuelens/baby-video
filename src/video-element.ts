@@ -313,11 +313,11 @@ export class BabyVideoElement extends HTMLElement {
 
   #updateCurrentTime(currentTime: number) {
     this.#currentTime = currentTime;
-    this.#updateEnded();
     this.#decodeVideoFrames();
     if (this.#srcObject) {
       checkBuffer(this.#srcObject);
     }
+    this.#updateEnded();
   }
 
   #updateEnded() {
