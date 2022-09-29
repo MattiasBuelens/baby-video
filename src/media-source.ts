@@ -136,13 +136,17 @@ export class BabyMediaSource extends EventTarget {
     if (this.#readyState !== "closed") {
       throw new DOMException("Ready state must be closed", "InvalidStateError");
     }
+    // Otherwise, the MediaSource was constructed in a Window:
     this.#mediaElement = mediaElement;
+    // 4. Set the readyState attribute to "open".
     this.#readyState = "open";
-    this.dispatchEvent(new Event("sourceopen"));
+    // 5. Queue a task to fire an event named sourceopen at the MediaSource.
+    queueTask(() => this.dispatchEvent(new Event("sourceopen")));
   }
 
   #detachFromMediaElement(): void {
     // https://w3c.github.io/media-source/#mediasource-detach
+    // Otherwise, the MediaSource was constructed in a Window:
     this.#mediaElement = undefined;
     // 3. Set the readyState attribute to "closed".
     this.#readyState = "closed";
@@ -152,7 +156,7 @@ export class BabyMediaSource extends EventTarget {
     // 7. Remove all the SourceBuffer objects from sourceBuffers.
     this.#sourceBuffers.length = 0;
     // 9. Queue a task to fire an event named sourceclose at the MediaSource.
-    this.dispatchEvent(new Event("sourceclose"));
+    queueTask(() => this.dispatchEvent(new Event("sourceclose")));
   }
 
   #durationChange(newDuration: number): void {
