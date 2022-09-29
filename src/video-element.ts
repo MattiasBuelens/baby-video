@@ -589,17 +589,19 @@ export class BabyVideoElement extends HTMLElement {
     });
     if (currentFrameIndex >= 0) {
       const frame = this.#decodedVideoFrames[currentFrameIndex];
-      this.#updateSize(frame.displayWidth, frame.displayHeight);
-      this.#canvasContext.drawImage(
-        frame,
-        0,
-        0,
-        frame.displayWidth,
-        frame.displayHeight
-      );
-      this.#decodedVideoFrames.splice(currentFrameIndex, 1);
-      this.#lastRenderedFrame = frame.timestamp!;
-      frame.close();
+      if (this.#lastRenderedFrame !== frame.timestamp!) {
+        this.#updateSize(frame.displayWidth, frame.displayHeight);
+        this.#canvasContext.drawImage(
+          frame,
+          0,
+          0,
+          frame.displayWidth,
+          frame.displayHeight
+        );
+        this.#decodedVideoFrames.splice(currentFrameIndex, 1);
+        this.#lastRenderedFrame = frame.timestamp!;
+        frame.close();
+      }
     }
     // Decode more frames (if we now have more space in the queue)
     this.#decodeVideoFrames();
