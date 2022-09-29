@@ -46,19 +46,24 @@ for (const segmentURL of segmentURLs) {
 
 interface Segment {
   url: string;
+  startTime: number;
   isLast: boolean;
 }
 
 const segmentDuration = 4;
 
 function getSegmentForTime(time: number): Segment | undefined {
-  const segmentIndex = 1 + Math.floor(time / segmentDuration);
+  const segmentIndex = Math.floor(time / segmentDuration);
   if (segmentIndex < 0) {
     return undefined;
   }
+  const url = `https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps_1920x1080_8000k/bbb_30fps_1920x1080_8000k_${
+    segmentIndex + 1
+  }.m4v`;
   return {
-    url: `https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps_1920x1080_8000k/bbb_30fps_1920x1080_8000k_${segmentIndex}.m4v`,
-    isLast: segmentIndex === 159,
+    url,
+    startTime: segmentIndex * segmentDuration,
+    isLast: segmentIndex === 158,
   };
 }
 
@@ -70,23 +75,22 @@ async function bufferLoop(signal: AbortSignal) {
     if (signal.aborted) throw signal.reason;
     const currentTime = video.currentTime;
     const currentRange = video.buffered.find(currentTime);
-    const targetTime = currentRange ? currentRange[1] : currentTime;
-    if (targetTime - currentTime < 20) {
-      const segment = getSegmentForTime(targetTime);
-      if (segment) {
-        const segmentData = await (
-          await fetch(segment.url, { signal })
-        ).arrayBuffer();
-        sourceBuffer.appendBuffer(segmentData);
-        await waitForEvent(sourceBuffer, "updateend");
-        if (segment.isLast) {
-          mediaSource.endOfStream();
-          break; // stop buffering until next seek
-        }
-        continue;
-      }
+    const nextTime = currentRange ? currentRange[1] : currentTime;
+    const nextSegment = getSegmentForTime(nextTime)!;
+    // Wait for current time to reach end of its buffer
+    while (nextSegment.startTime - video.currentTime > 20) {
+      await waitForEvent(video, "timeupdate", signal);
     }
-    await waitForEvent(video, "timeupdate", signal);
+    // Append next segment
+    const segmentData = await (
+      await fetch(nextSegment.url, { signal })
+    ).arrayBuffer();
+    sourceBuffer.appendBuffer(segmentData);
+    await waitForEvent(sourceBuffer, "updateend");
+    if (nextSegment.isLast) {
+      mediaSource.endOfStream();
+      break; // Stop buffering until next seek
+    }
   }
 }
 
