@@ -1,4 +1,4 @@
-import { TimeRange, TimeRanges } from "./time-ranges";
+import { TimeRanges } from "./time-ranges";
 import { Sample } from "mp4box";
 import { insertSorted } from "./util";
 
@@ -160,20 +160,26 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
   }
 
   removeSamples(startInMicros: number, endInMicros: number): void {
-    const removedRanges: TimeRange[] = [];
+    let didRemove: boolean = false;
     for (let i = this.#frames.length - 1; i >= 0; i--) {
       const frame = this.#frames[i];
       if (frame.timestamp >= startInMicros && frame.timestamp < endInMicros) {
         this.#frames.splice(i, 1);
-        removedRanges.push([
-          frame.timestamp! / 1e6,
-          (frame.timestamp! + frame.duration!) / 1e6,
-        ]);
+        didRemove = true;
       }
     }
-    this.trackBufferRanges = this.trackBufferRanges.subtract(
-      new TimeRanges(removedRanges).mergeOverlaps()
-    );
+    if (didRemove) {
+      this.#updateTrackBufferRanges();
+    }
+  }
+
+  #updateTrackBufferRanges(): void {
+    this.trackBufferRanges = new TimeRanges(
+      this.#frames.map((frame) => [
+        frame.timestamp! / 1e6,
+        (frame.timestamp! + frame.duration!) / 1e6,
+      ])
+    ).mergeOverlaps(BUFFERED_TOLERANCE);
   }
 }
 
@@ -316,7 +322,7 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
     //      in the previous step by removing all coded frames from this track buffer
     //      between those frames removed in the previous step and the next random
     //      access point after those removed frames.
-    const removedRanges: TimeRange[] = [];
+    let didRemove: boolean = false;
     for (let i = this.#gops.length - 1; i >= 0; i--) {
       const gop = this.#gops[i];
       const removeFrom = gop.frames.findIndex(
@@ -328,18 +334,23 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
       } else if (removeFrom === 0) {
         // Remove entire GOP.
         this.#gops.splice(i, 1);
-        removedRanges.push([gop.start / 1e6, gop.end / 1e6]);
+        didRemove = true;
       } else {
         // Remove some frames.
         const lastFrame = gop.frames[removeFrom - 1];
-        const oldEnd = gop.end;
         gop.end = lastFrame.timestamp! + lastFrame.duration!;
         gop.frames.splice(removeFrom);
-        removedRanges.push([gop.end / 1e6, oldEnd / 1e6]);
+        didRemove = true;
       }
     }
-    this.trackBufferRanges = this.trackBufferRanges.subtract(
-      new TimeRanges(removedRanges).mergeOverlaps()
-    );
+    if (didRemove) {
+      this.#updateTrackBufferRanges();
+    }
+  }
+
+  #updateTrackBufferRanges(): void {
+    this.trackBufferRanges = new TimeRanges(
+      this.#gops.map((gop) => [gop.start / 1e6, gop.end / 1e6])
+    ).mergeOverlaps(BUFFERED_TOLERANCE);
   }
 }
