@@ -31,6 +31,7 @@ export let updateReadyState: (
   newReadyState: MediaReadyState
 ) => void;
 export let notifyProgress: (videoElement: BabyVideoElement) => void;
+export let notifyEndOfStream: (videoElement: BabyVideoElement) => void;
 
 // Low and high watermark for decode queue
 // If the queue drops below the LWM, we try to fill it with up to HWM new frames
@@ -57,6 +58,7 @@ export class BabyVideoElement extends HTMLElement {
   #nextProgressTimer: number = 0;
   #hasFiredLoadedData: boolean = false;
   #seekAbortController: AbortController = new AbortController();
+  #isEndOfStream: boolean = false;
 
   readonly #videoDecoder: VideoDecoder;
   #lastVideoDecoderConfig: VideoDecoderConfig | undefined = undefined;
@@ -311,10 +313,49 @@ export class BabyVideoElement extends HTMLElement {
 
   #updateCurrentTime(currentTime: number) {
     this.#currentTime = currentTime;
+    this.#updateEnded();
     this.#decodeVideoFrames();
     if (this.#srcObject) {
       checkBuffer(this.#srcObject);
     }
+  }
+
+  #updateEnded() {
+    const wasEnded = this.#ended;
+    this.#ended = this.#hasEndedPlayback();
+    // When the current playback position reaches the end of the media resource
+    // when the direction of playback is forwards, then the user agent must follow these steps:
+    if (!wasEnded && this.#ended) {
+      // 3. Queue a media element task given the media element and the following steps:
+      queueTask(() => {
+        // 3.1. Fire an event named timeupdate at the media element.
+        this.dispatchEvent(new Event("timeupdate"));
+        // 3.2. If the media element has ended playback, the direction of playback is forwards,
+        //      and paused is false, then:
+        if (this.#ended && !this.#paused) {
+          // 3.2.1. Set the paused attribute to true.
+          this.#paused = true;
+          // 3.2.2. Fire an event named pause at the media element.
+          this.dispatchEvent(new Event("pause"));
+          // 3.2.3. Take pending play promises and reject pending play promises with the result and an "AbortError" DOMException.
+          const error = new DOMException("Aborted because ended", "AbortError");
+          this.#takePendingPlayPromises().forEach((deferred) =>
+            deferred.reject(error)
+          );
+        }
+        // 3.3. Fire an event named ended at the media element.
+        this.dispatchEvent(new Event("ended"));
+      });
+    }
+  }
+
+  #hasEndedPlayback(): boolean {
+    // https://html.spec.whatwg.org/multipage/media.html#ended-playback
+    return (
+      this.#readyState >= MediaReadyState.HAVE_METADATA &&
+      this.#isEndOfStream &&
+      this.#currentTime === this.#duration
+    );
   }
 
   #advanceCurrentTime(now: number): void {
@@ -702,6 +743,10 @@ export class BabyVideoElement extends HTMLElement {
     }
   }
 
+  #notifyEndOfStream(): void {
+    this.#isEndOfStream = true;
+  }
+
   static {
     updateDuration = (videoElement: BabyVideoElement, newDuration: number) => {
       videoElement.#updateDuration(newDuration);
@@ -714,6 +759,9 @@ export class BabyVideoElement extends HTMLElement {
     };
     notifyProgress = (videoElement: BabyVideoElement) => {
       videoElement.#notifyProgress();
+    };
+    notifyEndOfStream = (videoElement: BabyVideoElement) => {
+      videoElement.#notifyEndOfStream();
     };
   }
 }

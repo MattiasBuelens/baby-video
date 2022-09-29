@@ -2,6 +2,7 @@ import { BabySourceBuffer, getVideoTrackBuffer } from "./source-buffer";
 import {
   BabyVideoElement,
   MediaReadyState,
+  notifyEndOfStream,
   updateDuration,
   updateReadyState,
 } from "./video-element";
@@ -183,9 +184,14 @@ export class BabyMediaSource extends EventTarget {
       // 3.1. Run the duration change algorithm with new duration set to
       //      the largest track buffer ranges end time across all the track buffers
       //      across all SourceBuffer objects in sourceBuffers.
-      // TODO
+      const largestEndTime = Math.max(
+        ...this.#sourceBuffers.map((sourceBuffer) =>
+          sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1)
+        )
+      );
+      this.#durationChange(largestEndTime);
       // 3.2. Notify the media element that it now has all of the media data.
-      // TODO
+      notifyEndOfStream(this.#mediaElement!);
     } else if (error === "network") {
       // TODO
     } else if (error === "decode") {
