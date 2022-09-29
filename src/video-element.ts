@@ -552,13 +552,19 @@ export class BabyVideoElement extends HTMLElement {
       this.#nextDecodedFramePromise = undefined;
     }
     // Schedule render immediately if this is the first decoded frame after a seek
-    if (this.#lastRenderedFrame === undefined && this.#nextRenderFrame === 0) {
+    if (this.#lastRenderedFrame === undefined) {
+      this.#scheduleRenderVideoFrame();
+    }
+    // Decode more frames (if we now have more space in the queue)
+    this.#decodeVideoFrames();
+  }
+
+  #scheduleRenderVideoFrame() {
+    if (this.#nextRenderFrame === 0) {
       this.#nextRenderFrame = requestAnimationFrame(() =>
         this.#renderVideoFrame()
       );
     }
-    // Decode more frames (if we now have more space in the queue)
-    this.#decodeVideoFrames();
   }
 
   #renderVideoFrame(): void {
@@ -667,6 +673,9 @@ export class BabyVideoElement extends HTMLElement {
       if (!this.#hasFiredLoadedData) {
         this.#hasFiredLoadedData = true;
         queueTask(() => this.dispatchEvent(new Event("loadeddata")));
+      }
+      if (this.#advanceLoop === 0) {
+        this.#scheduleRenderVideoFrame();
       }
       // If the new ready state is HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA, then the relevant steps below must then be run also.
     }
