@@ -48,6 +48,8 @@ for (const segmentURL of segmentURLs) {
 interface Segment {
   url: string;
   startTime: number;
+  endTime: number;
+  isFirst: boolean;
   isLast: boolean;
 }
 
@@ -55,9 +57,9 @@ const segmentDuration = 4;
 const lastSegmentIndex = Math.ceil(streamDuration / segmentDuration) - 1;
 
 function getSegmentForTime(time: number): Segment | undefined {
-  const segmentIndex = Math.min(
-    lastSegmentIndex,
-    Math.floor(time / segmentDuration)
+  const segmentIndex = Math.max(
+    0,
+    Math.min(lastSegmentIndex, Math.floor(time / segmentDuration))
   );
   if (segmentIndex < 0) {
     return undefined;
@@ -68,9 +70,14 @@ function getSegmentForTime(time: number): Segment | undefined {
   return {
     url,
     startTime: segmentIndex * segmentDuration,
+    endTime: (segmentIndex + 1) * segmentDuration,
+    isFirst: segmentIndex === 0,
     isLast: segmentIndex === lastSegmentIndex,
   };
 }
+
+const forwardBufferSize = 30;
+const backwardBufferSize = 10;
 
 let pendingBufferLoop: Promise<void> = Promise.resolve();
 
@@ -78,16 +85,44 @@ async function bufferLoop(signal: AbortSignal) {
   await pendingBufferLoop;
   while (true) {
     if (signal.aborted) throw signal.reason;
-    const currentRange = video.buffered.find(video.currentTime);
-    const nextTime = currentRange ? currentRange[1] : video.currentTime;
-    const nextSegment = getSegmentForTime(nextTime)!;
-    // Wait for current time to reach end of its buffer
-    while (nextSegment.startTime - video.currentTime > 20) {
-      await waitForEvent(video, "timeupdate", signal);
+    // Check buffer health
+    while (true) {
+      const currentRange = video.buffered.find(video.currentTime);
+      const forward = video.playbackRate >= 0;
+      if (!currentRange) {
+        // No buffer, need new segment immediately
+        break;
+      }
+      if (forward) {
+        if (currentRange[1] - video.currentTime <= 20) {
+          // Not enough buffer ahead of current time
+          break;
+        }
+      } else {
+        if (video.currentTime - currentRange[0] <= 20) {
+          // Not enough buffer behind current time
+          break;
+        }
+      }
+      // Still enough buffer, wait for playback to progress
+      await waitForEvent(video, ["timeupdate", "ratechange"], signal);
     }
+    // Find next segment
+    const currentRange = video.buffered.find(video.currentTime);
+    const forward = video.playbackRate >= 0;
+    const nextTime = currentRange
+      ? forward
+        ? currentRange[1]
+        : currentRange[0] - 0.001
+      : video.currentTime;
+    const nextSegment = getSegmentForTime(nextTime)!;
     // Remove old buffer before/after current time
+    const retainStart =
+      video.currentTime - (forward ? backwardBufferSize : forwardBufferSize);
+    const retainEnd =
+      video.currentTime + (forward ? forwardBufferSize : backwardBufferSize);
     const oldBuffered = video.buffered.subtract(
-      new TimeRanges([[video.currentTime - 10, video.currentTime + 30]])
+      new TimeRanges([[retainStart, retainEnd]])
     );
     for (let i = 0; i < oldBuffered.length; i++) {
       sourceBuffer.remove(oldBuffered.start(i), oldBuffered.end(i));
@@ -99,9 +134,15 @@ async function bufferLoop(signal: AbortSignal) {
     ).arrayBuffer();
     sourceBuffer.appendBuffer(segmentData);
     await waitForEvent(sourceBuffer, "updateend");
-    if (nextSegment.isLast) {
-      mediaSource.endOfStream();
-      break; // Stop buffering until next seek
+    if (forward) {
+      if (nextSegment.isLast) {
+        mediaSource.endOfStream();
+        break; // Stop buffering until next seek
+      }
+    } else {
+      if (nextSegment.isFirst) {
+        break; // Stop buffering until next seek
+      }
     }
   }
 }
@@ -115,6 +156,7 @@ function restartBuffering() {
 }
 
 video.addEventListener("seeking", restartBuffering);
+video.addEventListener("ratechange", restartBuffering);
 restartBuffering();
 
 function logEvent(event: Event) {
