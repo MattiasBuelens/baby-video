@@ -149,10 +149,13 @@ export class BabyVideoElement extends HTMLElement {
     if (value === this.#playbackRate) {
       return;
     }
+    const currentTime = this.#getCurrentPlaybackPosition(performance.now());
     if (Math.sign(value) !== Math.sign(this.#playbackRate)) {
       this.#resetVideoDecoder();
     }
     this.#playbackRate = value;
+    this.#updateCurrentTime(currentTime);
+    this.#updatePlaying();
     this.dispatchEvent(new Event("ratechange"));
   }
 
