@@ -134,7 +134,7 @@ export class BabyVideoElement extends HTMLElement {
   }
 
   get ended(): boolean {
-    return this.#ended;
+    return this.#ended && this.#playbackRate >= 0;
   }
 
   get paused(): boolean {
@@ -342,10 +342,13 @@ export class BabyVideoElement extends HTMLElement {
 
   #updateEnded() {
     const wasEnded = this.#ended;
-    this.#ended = this.#playbackRate >= 0 && this.#hasEndedPlayback();
+    this.#ended = this.#hasEndedPlayback();
+    if (wasEnded || !this.#ended) {
+      return;
+    }
     // When the current playback position reaches the end of the media resource
     // when the direction of playback is forwards, then the user agent must follow these steps:
-    if (!wasEnded && this.#ended) {
+    if (this.#playbackRate >= 0) {
       // 3. Queue a media element task given the media element and the following steps:
       queueTask(() => {
         // 3.1. Fire an event named timeupdate at the media element.
@@ -366,6 +369,12 @@ export class BabyVideoElement extends HTMLElement {
         // 3.3. Fire an event named ended at the media element.
         this.dispatchEvent(new Event("ended"));
       });
+    }
+    // When the current playback position reaches the earliest possible position of the media resource
+    // when the direction of playback is backwards, then the user agent must only queue a media element
+    // task given the media element to fire an event named timeupdate at the element.
+    else {
+      queueTask(() => this.dispatchEvent(new Event("timeupdate")));
     }
   }
 
