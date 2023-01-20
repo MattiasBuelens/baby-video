@@ -703,6 +703,9 @@ export class BabyVideoElement extends HTMLElement {
     const previousReadyState = this.#readyState;
     this.#readyState = newReadyState;
     this.#updatePlaying();
+    if (previousReadyState === newReadyState) {
+      return;
+    }
     // TODO https://html.spec.whatwg.org/multipage/media.html#ready-states
     // If the previous ready state was HAVE_NOTHING, and the new ready state is HAVE_METADATA
     if (
