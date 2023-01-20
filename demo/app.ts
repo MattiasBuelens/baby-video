@@ -19,7 +19,7 @@ video.addEventListener("seeked", logEvent);
 video.addEventListener("progress", logEvent);
 video.addEventListener("resize", logEvent);
 
-const streamDuration = 643.56;
+const streamDuration = 634.56;
 
 const mediaSource = new BabyMediaSource();
 video.srcObject = mediaSource;
@@ -52,9 +52,13 @@ interface Segment {
 }
 
 const segmentDuration = 4;
+const lastSegmentIndex = Math.ceil(streamDuration / segmentDuration) - 1;
 
 function getSegmentForTime(time: number): Segment | undefined {
-  const segmentIndex = Math.floor(time / segmentDuration);
+  const segmentIndex = Math.min(
+    lastSegmentIndex,
+    Math.floor(time / segmentDuration)
+  );
   if (segmentIndex < 0) {
     return undefined;
   }
@@ -64,7 +68,7 @@ function getSegmentForTime(time: number): Segment | undefined {
   return {
     url,
     startTime: segmentIndex * segmentDuration,
-    isLast: segmentIndex === 158,
+    isLast: segmentIndex === lastSegmentIndex,
   };
 }
 
