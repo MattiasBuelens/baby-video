@@ -170,6 +170,10 @@ export class BabyVideoElement extends HTMLElement {
     return this.#readyState;
   }
 
+  get seekable(): TimeRanges {
+    return new TimeRanges([[0, this.#duration]]);
+  }
+
   get seeking(): boolean {
     return this.#seeking;
   }
