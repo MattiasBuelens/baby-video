@@ -2,7 +2,7 @@ import { TimeRanges } from "./time-ranges";
 import { Sample } from "mp4box";
 import { Direction, insertSorted } from "./util";
 
-const BUFFERED_TOLERANCE: number = 1e-6;
+const BUFFERED_TOLERANCE: number = 1 / 60;
 
 export type EncodedChunk = EncodedAudioChunk | EncodedVideoChunk;
 export type DecoderConfig = AudioDecoderConfig | VideoDecoderConfig;
