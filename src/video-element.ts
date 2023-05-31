@@ -212,6 +212,10 @@ export class BabyVideoElement extends HTMLElement {
     return this.#canvas.height;
   }
 
+  load(): void {
+    // TODO
+  }
+
   play(): Promise<void> {
     // https://html.spec.whatwg.org/multipage/media.html#dom-media-play
     // 3. Let promise be a new promise and append promise to the list of pending play promises.
