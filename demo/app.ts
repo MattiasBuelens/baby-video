@@ -12,12 +12,13 @@ video.addEventListener("waiting", logEvent);
 video.addEventListener("play", logEvent);
 video.addEventListener("pause", logEvent);
 video.addEventListener("playing", logEvent);
-video.addEventListener("timeupdate", logEvent);
+// video.addEventListener("timeupdate", logEvent);
 video.addEventListener("durationchange", logEvent);
 video.addEventListener("seeking", logEvent);
 video.addEventListener("seeked", logEvent);
 video.addEventListener("progress", logEvent);
 video.addEventListener("resize", logEvent);
+video.addEventListener("ended", logEvent);
 
 const streamDuration = 634.56;
 
