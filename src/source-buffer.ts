@@ -99,6 +99,40 @@ export class BabySourceBuffer extends EventTarget {
     return intersectionRanges;
   }
 
+  abort() {
+    // https://w3c.github.io/media-source/#dom-sourcebuffer-abort
+    // 1. If this object has been removed from the sourceBuffers attribute of the parent media source
+    //    then throw an InvalidStateError exception and abort these steps.
+    if (!this.#parent.sourceBuffers.includes(this)) {
+      throw new DOMException("Source buffer was removed", "InvalidStateError");
+    }
+    // 2. If the readyState attribute of the parent media source is not in the "open" state
+    //    then throw an InvalidStateError exception and abort these steps.
+    if (this.#parent.readyState !== "open") {
+      throw new DOMException("Ready state must be open", "InvalidStateError");
+    }
+    // 3. If the range removal algorithm is running, then throw an InvalidStateError exception
+    //    and abort these steps.
+    // TODO
+    // 4. If the updating attribute equals true, then run the following steps:
+    if (this.#updating) {
+      // 4.1. Abort the buffer append algorithm if it is running.
+      // TODO
+      // 4.2. Set the updating attribute to false.
+      this.#updating = false;
+      // 4.3. Queue a task to fire an event named abort at this SourceBuffer object.
+      queueTask(() => this.dispatchEvent(new Event("abort")));
+      // 4.4. Queue a task to fire an event named updateend at this SourceBuffer object.
+      queueTask(() => this.dispatchEvent(new Event("updateend")));
+    }
+    // 5. Run the reset parser state algorithm.
+    // TODO
+    // 6. Set appendWindowStart to the presentation start time.
+    // TODO
+    // 7. Set appendWindowEnd to positive Infinity.
+    // TODO
+  }
+
   appendBuffer(data: BufferSource): void {
     // https://w3c.github.io/media-source/#dom-sourcebuffer-appendbuffer
     // 1. Run the prepare append algorithm.
