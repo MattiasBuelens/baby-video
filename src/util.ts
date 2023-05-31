@@ -135,3 +135,8 @@ export class Deferred<T> {
     this.reject((event.target as AbortSignal).reason);
   };
 }
+
+export enum Direction {
+  FORWARD = 1,
+  BACKWARD = -1,
+}

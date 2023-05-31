@@ -1,6 +1,6 @@
 import { TimeRanges } from "./time-ranges";
 import { Sample } from "mp4box";
-import { insertSorted } from "./util";
+import { Direction, insertSorted } from "./util";
 
 const BUFFERED_TOLERANCE: number = 1e-6;
 
@@ -82,12 +82,13 @@ export abstract class TrackBuffer<T extends EncodedChunk = EncodedChunk> {
 
   abstract findFrameForTime(time: number): T | undefined;
 
-  abstract getDecodeDependenciesForFrame(
-    frame: T,
-    lastDecodedFrame: T | undefined
-  ): DecodeQueue;
+  abstract getDecodeDependenciesForFrame(frame: T): DecodeQueue;
 
-  abstract getNextFrames(frame: T, maxAmount: number): DecodeQueue | undefined;
+  abstract getNextFrames(
+    frame: T,
+    maxAmount: number,
+    direction: Direction
+  ): DecodeQueue | undefined;
 
   abstract getRandomAccessPointAtOrAfter(
     timeInMicros: number
@@ -129,10 +130,7 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
     );
   }
 
-  getDecodeDependenciesForFrame(
-    frame: EncodedAudioChunk,
-    _lastDecodedFrame: EncodedAudioChunk | undefined
-  ): AudioDecodeQueue {
+  getDecodeDependenciesForFrame(frame: EncodedAudioChunk): AudioDecodeQueue {
     return {
       frames: [frame],
       codecConfig: this.codecConfig,
@@ -141,7 +139,8 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
 
   getNextFrames(
     frame: EncodedAudioChunk,
-    maxAmount: number
+    maxAmount: number,
+    _direction: Direction
   ): DecodeQueue | undefined {
     const frameIndex = this.#frames.indexOf(frame);
     if (frameIndex < 0 || frameIndex === this.#frames.length - 1) {
@@ -254,26 +253,14 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
     );
   }
 
-  getDecodeDependenciesForFrame(
-    frame: EncodedVideoChunk,
-    lastDecodedFrame: EncodedVideoChunk | undefined
-  ): VideoDecodeQueue {
+  getDecodeDependenciesForFrame(frame: EncodedVideoChunk): VideoDecodeQueue {
     const containingGop = this.#gops.find((gop) => {
       return gop.frames.includes(frame);
     })!;
-    // By default, decode from the first frame in the GOP (i.e. the sync frame)
+    // Decode from the first frame in the GOP (i.e. the sync frame)
     // up to (and including) the requested frame.
     let startIndex = 0;
     let endIndex = containingGop.frames.indexOf(frame);
-    if (lastDecodedFrame !== undefined) {
-      const lastDecodedFrameIndex =
-        containingGop.frames.indexOf(lastDecodedFrame);
-      // If last decoded frame is inside same GOP and precedes the requested frame,
-      // decode starting from the last decode frame.
-      if (lastDecodedFrameIndex >= 0 && lastDecodedFrameIndex < endIndex) {
-        startIndex = lastDecodedFrameIndex + 1;
-      }
-    }
     return {
       frames: containingGop.frames.slice(startIndex, endIndex + 1),
       codecConfig: containingGop.codecConfig,
@@ -282,7 +269,8 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
 
   getNextFrames(
     frame: EncodedVideoChunk,
-    maxAmount: number
+    maxAmount: number,
+    direction: Direction
   ): DecodeQueue | undefined {
     let gopIndex = this.#gops.findIndex((gop) => {
       return gop.frames.includes(frame);
@@ -294,20 +282,37 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
     let frameIndex = containingGop.frames.indexOf(frame);
     let nextGop: GroupOfPictures;
     let nextIndex: number;
-    if (frameIndex < containingGop.frames.length - 1) {
-      nextGop = containingGop;
-      nextIndex = frameIndex + 1;
-    } else {
-      nextGop = this.#gops[gopIndex + 1];
-      nextIndex = 0;
-      if (!nextGop || Math.abs(nextGop.start - containingGop.end) > 1) {
-        return undefined;
+    if (direction === Direction.FORWARD) {
+      if (frameIndex < containingGop.frames.length - 1) {
+        nextGop = containingGop;
+        nextIndex = frameIndex + 1;
+      } else {
+        nextGop = this.#gops[gopIndex + 1];
+        if (!nextGop || Math.abs(nextGop.start - containingGop.end) > 1) {
+          return undefined;
+        }
+        nextIndex = 0;
       }
+      return {
+        frames: nextGop.frames.slice(nextIndex, nextIndex + maxAmount),
+        codecConfig: nextGop.codecConfig,
+      };
+    } else {
+      if (frameIndex > 0) {
+        nextGop = containingGop;
+        nextIndex = frameIndex;
+      } else {
+        nextGop = this.#gops[gopIndex - 1];
+        if (!nextGop || Math.abs(nextGop.end - containingGop.start) > 1) {
+          return undefined;
+        }
+        nextIndex = nextGop.frames.length;
+      }
+      return {
+        frames: nextGop.frames.slice(0, nextIndex),
+        codecConfig: nextGop.codecConfig,
+      };
     }
-    return {
-      frames: nextGop.frames.slice(nextIndex, nextIndex + maxAmount),
-      codecConfig: nextGop.codecConfig,
-    };
   }
 
   getRandomAccessPointAtOrAfter(timeInMicros: number): number | undefined {

@@ -7,7 +7,7 @@ import {
   getActiveVideoTrackBuffer,
   getBuffered,
 } from "./media-source";
-import { Deferred, queueTask, waitForEvent } from "./util";
+import { Deferred, Direction, queueTask, waitForEvent } from "./util";
 import { TimeRanges } from "./time-ranges";
 import { VideoDecodeQueue } from "./track-buffer";
 
@@ -63,7 +63,7 @@ export class BabyVideoElement extends HTMLElement {
 
   readonly #videoDecoder: VideoDecoder;
   #lastVideoDecoderConfig: VideoDecoderConfig | undefined = undefined;
-  #lastDecodingVideoFrame: EncodedVideoChunk | undefined = undefined;
+  #furthestDecodingVideoFrame: EncodedVideoChunk | undefined = undefined;
   #decodingVideoFrames: EncodedVideoChunk[] = [];
   #decodedVideoFrames: VideoFrame[] = [];
   #nextDecodedFramePromise: Deferred<void> | undefined = undefined;
@@ -149,6 +149,9 @@ export class BabyVideoElement extends HTMLElement {
     if (value === this.#playbackRate) {
       return;
     }
+    if (Math.sign(value) !== Math.sign(this.#playbackRate)) {
+      this.#resetVideoDecoder();
+    }
     this.#playbackRate = value;
     this.dispatchEvent(new Event("ratechange"));
   }
@@ -233,7 +236,7 @@ export class BabyVideoElement extends HTMLElement {
     // https://html.spec.whatwg.org/multipage/media.html#internal-play-steps
     // 2. If the playback has ended and the direction of playback is forwards,
     //    seek to the earliest possible position of the media resource.
-    if (this.#ended) {
+    if (this.#playbackRate >= 0 && this.#ended) {
       this.#seek(0);
     }
     if (this.#paused) {
@@ -317,9 +320,9 @@ export class BabyVideoElement extends HTMLElement {
       const newTime =
         this.#currentTime +
         (this.#playbackRate * Math.max(0, now - this.#lastAdvanceTime)) / 1000;
-      // Do not advance past end of current buffered range.
+      // Do not advance outside the current buffered range.
       const currentRange = this.buffered.find(this.#currentTime)!;
-      return Math.min(newTime, currentRange[1]);
+      return Math.min(Math.max(currentRange[0], newTime), currentRange[1]);
     } else {
       return this.#currentTime;
     }
@@ -336,7 +339,7 @@ export class BabyVideoElement extends HTMLElement {
 
   #updateEnded() {
     const wasEnded = this.#ended;
-    this.#ended = this.#hasEndedPlayback();
+    this.#ended = this.#playbackRate >= 0 && this.#hasEndedPlayback();
     // When the current playback position reaches the end of the media resource
     // when the direction of playback is forwards, then the user agent must follow these steps:
     if (!wasEnded && this.#ended) {
@@ -346,7 +349,7 @@ export class BabyVideoElement extends HTMLElement {
         this.dispatchEvent(new Event("timeupdate"));
         // 3.2. If the media element has ended playback, the direction of playback is forwards,
         //      and paused is false, then:
-        if (this.#ended && !this.#paused) {
+        if (this.#ended && this.#playbackRate >= 0 && !this.#paused) {
           // 3.2.1. Set the paused attribute to true.
           this.#paused = true;
           // 3.2.2. Fire an event named pause at the media element.
@@ -365,11 +368,14 @@ export class BabyVideoElement extends HTMLElement {
 
   #hasEndedPlayback(): boolean {
     // https://html.spec.whatwg.org/multipage/media.html#ended-playback
-    return (
-      this.#readyState >= MediaReadyState.HAVE_METADATA &&
-      this.#isEndOfStream &&
-      this.#currentTime === this.#duration
-    );
+    if (this.#readyState < MediaReadyState.HAVE_METADATA) {
+      return false;
+    }
+    if (this.#playbackRate >= 0) {
+      return this.#isEndOfStream && this.#currentTime === this.#duration;
+    } else {
+      return this.#currentTime === 0;
+    }
   }
 
   #advanceCurrentTime(now: number): void {
@@ -486,17 +492,17 @@ export class BabyVideoElement extends HTMLElement {
     if (!videoTrackBuffer) {
       return;
     }
+    const direction =
+      this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
     // Decode frames for current time
-    if (this.#lastDecodingVideoFrame === undefined) {
+    if (this.#furthestDecodingVideoFrame === undefined) {
       const frameAtTime = videoTrackBuffer.findFrameForTime(this.currentTime);
       if (frameAtTime === undefined) {
         return;
       }
       this.#processDecodeQueue(
-        videoTrackBuffer.getDecodeDependenciesForFrame(
-          frameAtTime,
-          this.#lastDecodingVideoFrame
-        )
+        videoTrackBuffer.getDecodeDependenciesForFrame(frameAtTime),
+        direction
       );
     }
     // Decode next frames in advance
@@ -505,18 +511,22 @@ export class BabyVideoElement extends HTMLElement {
       decodeQueueLwm
     ) {
       const nextQueue = videoTrackBuffer.getNextFrames(
-        this.#lastDecodingVideoFrame!,
+        this.#furthestDecodingVideoFrame!,
         decodeQueueHwm -
-          (this.#decodingVideoFrames.length + this.#decodedVideoFrames.length)
+          (this.#decodingVideoFrames.length + this.#decodedVideoFrames.length),
+        direction
       );
       if (nextQueue === undefined) {
         break;
       }
-      this.#processDecodeQueue(nextQueue);
+      this.#processDecodeQueue(nextQueue, direction);
     }
   }
 
-  #processDecodeQueue(decodeQueue: VideoDecodeQueue): void {
+  #processDecodeQueue(
+    decodeQueue: VideoDecodeQueue,
+    direction: Direction
+  ): void {
     if (
       this.#videoDecoder.state === "unconfigured" ||
       this.#lastVideoDecoderConfig !== decodeQueue.codecConfig
@@ -528,11 +538,15 @@ export class BabyVideoElement extends HTMLElement {
       this.#videoDecoder.decode(frame);
       this.#decodingVideoFrames.push(frame);
     }
-    this.#lastDecodingVideoFrame =
-      decodeQueue.frames[decodeQueue.frames.length - 1];
+    if (direction == Direction.FORWARD) {
+      this.#furthestDecodingVideoFrame =
+        decodeQueue.frames[decodeQueue.frames.length - 1];
+    } else {
+      this.#furthestDecodingVideoFrame = decodeQueue.frames[0];
+    }
   }
 
-  #onVideoFrame(frame: VideoFrame): void {
+  async #onVideoFrame(frame: VideoFrame) {
     const decodingFrameIndex = this.#decodingVideoFrames.findIndex(
       (x) => x.timestamp === frame.timestamp
     );
@@ -543,11 +557,12 @@ export class BabyVideoElement extends HTMLElement {
     }
     const decodingFrame = this.#decodingVideoFrames[decodingFrameIndex];
     this.#decodingVideoFrames.splice(decodingFrameIndex, 1);
-    // Drop frames that are before current time, since we're too late to render them.
+    // Drop frames that are beyond current time, since we're too late to render them.
     const currentTimeInMicros = 1e6 * this.#currentTime;
+    const direction =
+      this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
     if (
-      decodingFrame.timestamp! + decodingFrame.duration! <=
-      currentTimeInMicros
+      this.#isFrameBeyondTime(decodingFrame, direction, currentTimeInMicros)
     ) {
       frame.close();
       // Decode more frames (if we now have more space in the queue)
@@ -577,6 +592,18 @@ export class BabyVideoElement extends HTMLElement {
     this.#decodeVideoFrames();
   }
 
+  #isFrameBeyondTime(
+    frame: EncodedVideoChunk | VideoFrame,
+    direction: Direction,
+    timeInMicros: number
+  ): boolean {
+    if (direction == Direction.FORWARD) {
+      return frame.timestamp! + frame.duration! <= timeInMicros;
+    } else {
+      return frame.timestamp! >= timeInMicros;
+    }
+  }
+
   #scheduleRenderVideoFrame() {
     if (this.#nextRenderFrame === 0) {
       this.#nextRenderFrame = requestAnimationFrame(() =>
@@ -588,16 +615,16 @@ export class BabyVideoElement extends HTMLElement {
   #renderVideoFrame(): void {
     this.#nextRenderFrame = 0;
     const currentTimeInMicros = 1e6 * this.#currentTime;
+    const direction =
+      this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
     // Drop all frames that are before current time, since we're too late to render them.
-    let nbOfDroppedFrames = 0;
-    for (let i = 0; i < this.#decodedVideoFrames.length; i++) {
+    for (let i = this.#decodedVideoFrames.length - 1; i >= 0; i--) {
       const frame = this.#decodedVideoFrames[i];
-      if (frame.timestamp! + frame.duration! <= currentTimeInMicros) {
+      if (this.#isFrameBeyondTime(frame, direction, currentTimeInMicros)) {
         frame.close();
-        nbOfDroppedFrames++;
+        this.#decodedVideoFrames.splice(i, 1);
       }
     }
-    this.#decodedVideoFrames.splice(0, nbOfDroppedFrames);
     // Render the frame at current time.
     let currentFrameIndex = this.#decodedVideoFrames.findIndex((frame) => {
       return (
@@ -630,7 +657,7 @@ export class BabyVideoElement extends HTMLElement {
       frame.close();
     }
     this.#lastVideoDecoderConfig = undefined;
-    this.#lastDecodingVideoFrame = undefined;
+    this.#furthestDecodingVideoFrame = undefined;
     this.#lastRenderedFrame = undefined;
     this.#decodingVideoFrames.length = 0;
     this.#decodedVideoFrames.length = 0;
@@ -639,7 +666,7 @@ export class BabyVideoElement extends HTMLElement {
 
   #isPotentiallyPlaying(): boolean {
     // https://html.spec.whatwg.org/multipage/media.html#potentially-playing
-    return !this.#paused && !this.#ended && !this.#isBlocked();
+    return !this.#paused && !this.#hasEndedPlayback() && !this.#isBlocked();
   }
 
   #isBlocked(): boolean {
@@ -709,7 +736,7 @@ export class BabyVideoElement extends HTMLElement {
       // paused for user interaction, or paused for in-band content,
       // the user agent must queue a media element task given the media element to fire an event named timeupdate at the element,
       // and queue a media element task given the media element to fire an event named waiting at the element.
-      if (wasPotentiallyPlaying && !this.#ended) {
+      if (wasPotentiallyPlaying && !this.#hasEndedPlayback()) {
         queueTask(() => this.dispatchEvent(new Event("timeupdate")));
         queueTask(() => this.dispatchEvent(new Event("waiting")));
       }
