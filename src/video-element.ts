@@ -1,4 +1,4 @@
-import stylesheet from "./style.css";
+import stylesheet from "./style.css?inline";
 import {
   attachToMediaElement,
   BabyMediaSource,

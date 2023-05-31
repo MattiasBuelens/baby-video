@@ -33,13 +33,13 @@
     "format": "prettier --write ."
   },
   "devDependencies": {
-    "media-chrome": "^0.12.0",
-    "prettier": "^2.7.1",
-    "typescript": "^4.8.4",
-    "vite": "^3.1.4"
+    "media-chrome": "^1.0.0",
+    "prettier": "^2.8.8",
+    "typescript": "^5.0.4",
+    "vite": "^4.3.9"
   },
   "dependencies": {
-    "@types/dom-webcodecs": "^0.1.4",
+    "@types/dom-webcodecs": "^0.1.7",
     "mp4box": "^0.5.2"
   }
 }
