@@ -8,7 +8,7 @@ import {
   getBuffered,
 } from "./media-source";
 import { Deferred, Direction, queueTask, waitForEvent } from "./util";
-import { TimeRanges } from "./time-ranges";
+import { TimeRange, TimeRanges } from "./time-ranges";
 import { VideoDecodeQueue } from "./track-buffer";
 
 const template = document.createElement("template");
@@ -47,6 +47,7 @@ export class BabyVideoElement extends HTMLElement {
   #ended: boolean = false;
   #paused: boolean = true;
   #playbackRate: number = 1;
+  #played: TimeRanges = new TimeRanges([]);
   #readyState: MediaReadyState = MediaReadyState.HAVE_NOTHING;
   #seeking: boolean = false;
   #srcObject: BabyMediaSource | undefined;
@@ -54,6 +55,7 @@ export class BabyVideoElement extends HTMLElement {
   #pendingPlayPromises: Array<Deferred<void>> = [];
   #advanceLoop: number = 0;
   #lastAdvanceTime: number = 0;
+  #lastPlayedTime: number = NaN;
   #lastTimeUpdate: number = 0;
   #lastProgress: number = 0;
   #nextProgressTimer: number = 0;
@@ -156,7 +158,12 @@ export class BabyVideoElement extends HTMLElement {
     this.#playbackRate = value;
     this.#updateCurrentTime(currentTime);
     this.#updatePlaying();
+    this.#updatePlayed();
     this.dispatchEvent(new Event("ratechange"));
+  }
+
+  get played(): TimeRanges {
+    return this.#played;
   }
 
   get readyState(): MediaReadyState {
@@ -181,11 +188,13 @@ export class BabyVideoElement extends HTMLElement {
     this.#hasFiredLoadedData = false;
     this.#ended = false;
     this.#paused = true;
+    this.#played = new TimeRanges([]);
     this.#readyState = MediaReadyState.HAVE_NOTHING;
     this.#seeking = false;
     this.#seekAbortController.abort();
     this.#lastAdvanceTime = 0;
     this.#lastProgress = 0;
+    this.#lastPlayedTime = NaN;
     clearTimeout(this.#nextProgressTimer);
     this.#lastTimeUpdate = 0;
     this.#updatePlaying();
@@ -246,6 +255,7 @@ export class BabyVideoElement extends HTMLElement {
       // 3. If the media element's paused attribute is true, then:
       // 3.1. Change the value of paused to false.
       this.#paused = false;
+      this.#updatePlayed();
       // 3.3. Queue a media element task given the media element to fire an event named play at the element.
       queueTask(() => this.dispatchEvent(new Event("play")));
       if (this.#readyState <= MediaReadyState.HAVE_CURRENT_DATA) {
@@ -278,7 +288,9 @@ export class BabyVideoElement extends HTMLElement {
       const now = performance.now();
       const currentPlaybackPosition = this.#getCurrentPlaybackPosition(now);
       // 2.1. Change the value of paused to true.
+      this.#updatePlayed();
       this.#paused = true;
+      this.#updatePlayed();
       // 2.2. Take pending play promises and let promises be the result.
       const promises = this.#takePendingPlayPromises();
       // 2.3. Queue a media element task given the media element and the following steps:
@@ -298,6 +310,21 @@ export class BabyVideoElement extends HTMLElement {
         this.#timeMarchesOn(false, now);
       });
       this.#updatePlaying();
+    }
+  }
+
+  #updatePlayed(): void {
+    if (this.#isPotentiallyPlaying() && !this.#seeking) {
+      if (!isNaN(this.#lastPlayedTime)) {
+        const newRange: TimeRange = [
+          Math.min(this.#currentTime, this.#lastPlayedTime),
+          Math.max(this.#currentTime, this.#lastPlayedTime),
+        ];
+        this.#played = this.#played.union(new TimeRanges([newRange]));
+      }
+      this.#lastPlayedTime = this.#currentTime;
+    } else {
+      this.#lastPlayedTime = NaN;
     }
   }
 
@@ -337,6 +364,7 @@ export class BabyVideoElement extends HTMLElement {
     if (this.#srcObject) {
       checkBuffer(this.#srcObject);
     }
+    this.#updatePlayed();
     this.#updateEnded();
   }
 
@@ -426,6 +454,7 @@ export class BabyVideoElement extends HTMLElement {
     if (this.#seeking) {
       this.#seekAbortController.abort();
     }
+    this.#updatePlayed();
     // 4. Set the seeking IDL attribute to true.
     this.#seeking = true;
     // 6. If the new playback position is later than the end of the media resource,
@@ -473,6 +502,7 @@ export class BabyVideoElement extends HTMLElement {
     // 14. Set the seeking IDL attribute to false.
     this.#seeking = false;
     this.#updatePlaying();
+    this.#updatePlayed();
     // 15. Run the time marches on steps.
     this.#timeMarchesOn(false, performance.now());
     // 16. Queue a media element task given the media element to fire an event named timeupdate at the element.
@@ -712,6 +742,7 @@ export class BabyVideoElement extends HTMLElement {
     const previousReadyState = this.#readyState;
     this.#readyState = newReadyState;
     this.#updatePlaying();
+    this.#updatePlayed();
     if (previousReadyState === newReadyState) {
       return;
     }
