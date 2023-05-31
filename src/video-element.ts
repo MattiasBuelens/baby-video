@@ -555,7 +555,11 @@ export class BabyVideoElement extends HTMLElement {
       return;
     }
     // Note: Chrome does not yet copy EncodedVideoChunk.duration to VideoFrame.duration
-    const newFrame = new VideoFrame(frame as unknown as CanvasImageSource, {
+    const bitmap = await createImageBitmap(
+      frame as unknown as CanvasImageSource
+    );
+    const newFrame = new VideoFrame(bitmap, {
+      timestamp: decodingFrame.timestamp,
       duration: decodingFrame.duration!,
     });
     frame.close();
