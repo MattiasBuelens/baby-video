@@ -46,6 +46,7 @@ export class BabyVideoElement extends HTMLElement {
   #duration: number = NaN;
   #ended: boolean = false;
   #paused: boolean = true;
+  #playbackRate: number = 1;
   #readyState: MediaReadyState = MediaReadyState.HAVE_NOTHING;
   #seeking: boolean = false;
   #srcObject: BabyMediaSource | undefined;
@@ -138,6 +139,18 @@ export class BabyVideoElement extends HTMLElement {
 
   get paused(): boolean {
     return this.#paused;
+  }
+
+  get playbackRate(): number {
+    return this.#playbackRate;
+  }
+
+  set playbackRate(value: number) {
+    if (value === this.#playbackRate) {
+      return;
+    }
+    this.#playbackRate = value;
+    this.dispatchEvent(new Event("ratechange"));
   }
 
   get readyState(): MediaReadyState {
@@ -302,7 +315,8 @@ export class BabyVideoElement extends HTMLElement {
     // of media time per unit time of the media timeline's clock.
     if (this.#isPotentiallyPlaying() && !this.#seeking) {
       const newTime =
-        this.#currentTime + Math.max(0, now - this.#lastAdvanceTime) / 1000;
+        this.#currentTime +
+        (this.#playbackRate * Math.max(0, now - this.#lastAdvanceTime)) / 1000;
       // Do not advance past end of current buffered range.
       const currentRange = this.buffered.find(this.#currentTime)!;
       return Math.min(newTime, currentRange[1]);
