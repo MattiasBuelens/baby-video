@@ -35,8 +35,8 @@ export let notifyEndOfStream: (videoElement: BabyVideoElement) => void;
 
 // Low and high watermark for decode queue
 // If the queue drops below the LWM, we try to fill it with up to HWM new frames
-const decodeQueueLwm = 3;
-const decodeQueueHwm = 10;
+const decodeQueueLwm = 20;
+const decodeQueueHwm = 30;
 
 export class BabyVideoElement extends HTMLElement {
   readonly #canvas: HTMLCanvasElement;
