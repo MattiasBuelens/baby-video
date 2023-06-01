@@ -82,6 +82,11 @@ export class BabyVideoElement extends HTMLElement {
   #furthestDecodedAudioFrame: EncodedAudioChunk | undefined = undefined;
   #decodingAudioFrames: EncodedAudioChunk[] = [];
   #decodedAudioFrames: AudioData[] = [];
+
+  #audioContext: AudioContext | undefined;
+  #scheduledAudioSourceNodes: Map<AudioData, AudioBufferSourceNode> = new Map();
+  #volumeGainNode: GainNode | undefined;
+
   constructor() {
     super();
 
@@ -357,6 +362,7 @@ export class BabyVideoElement extends HTMLElement {
 
   #updatePlaying(): void {
     if (this.#isPotentiallyPlaying() && !this.#seeking) {
+      void this.#audioContext?.resume();
       if (this.#advanceLoop === 0) {
         this.#lastAdvanceTime = performance.now();
         this.#advanceLoop = requestAnimationFrame((now) => {
@@ -364,6 +370,7 @@ export class BabyVideoElement extends HTMLElement {
         });
       }
     } else if (this.#advanceLoop !== 0) {
+      void this.#audioContext?.suspend();
       cancelAnimationFrame(this.#advanceLoop);
       this.#advanceLoop = 0;
     }
@@ -449,6 +456,7 @@ export class BabyVideoElement extends HTMLElement {
   #advanceCurrentTime(now: number): void {
     this.#updateCurrentTime(this.#getCurrentPlaybackPosition(now));
     this.#renderVideoFrame();
+    this.#renderAudio();
     this.#lastAdvanceTime = now;
     this.#timeMarchesOn(true, now);
     if (this.#isPotentiallyPlaying() && !this.#seeking) {
@@ -825,6 +833,78 @@ export class BabyVideoElement extends HTMLElement {
     // Decode more frames (if we now have more space in the queue)
     this.#decodeAudio();
   }
+
+  #initializeAudio(sampleRate: number): AudioContext {
+    this.#audioContext = new AudioContext({
+      sampleRate: sampleRate,
+      latencyHint: "playback",
+    });
+
+    this.#volumeGainNode = new GainNode(this.#audioContext);
+    this.#volumeGainNode.connect(this.#audioContext.destination);
+
+    if (this.#isPotentiallyPlaying() && !this.#seeking) {
+      void this.#audioContext.resume();
+    } else {
+      void this.#audioContext.suspend();
+    }
+
+    return this.#audioContext;
+  }
+
+  #renderAudio() {
+    const currentTimeInMicros = 1e6 * this.#currentTime;
+    const direction =
+      this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
+    // Drop all frames that are before current time, since we're too late to render them.
+    for (let i = this.#decodedAudioFrames.length - 1; i >= 0; i--) {
+      const frame = this.#decodedAudioFrames[i];
+      if (this.#isFrameBeyondTime(frame, direction, currentTimeInMicros)) {
+        frame.close();
+        this.#decodedAudioFrames.splice(i, 1);
+      }
+    }
+    // Render the frame at current time.
+    let currentFrameIndex = this.#decodedAudioFrames.findIndex((frame) => {
+      return (
+        frame.timestamp! <= currentTimeInMicros &&
+        currentTimeInMicros < frame.timestamp! + frame.duration!
+      );
+    });
+    if (currentFrameIndex >= 0) {
+      const frame = this.#decodedAudioFrames[currentFrameIndex];
+      this.#audioContext ??= this.#initializeAudio(frame.sampleRate);
+      if (!this.#scheduledAudioSourceNodes.has(frame)) {
+        const audioBuffer = new AudioBuffer({
+          numberOfChannels: frame.numberOfChannels,
+          length: frame.numberOfFrames,
+          sampleRate: frame.sampleRate,
+        });
+        for (let channel = 0; channel < frame.numberOfChannels; channel++) {
+          const destination = audioBuffer.getChannelData(channel);
+          frame.copyTo(destination, {
+            format: frame.format,
+            planeIndex: channel,
+          });
+        }
+        const audioSourceNode = this.#audioContext.createBufferSource();
+        audioSourceNode.buffer = audioBuffer;
+        audioSourceNode.connect(this.#volumeGainNode!);
+        this.#scheduledAudioSourceNodes.set(frame, audioSourceNode);
+        if (frame.timestamp! < currentTimeInMicros) {
+          audioSourceNode.start(
+            0,
+            (currentTimeInMicros - frame.timestamp!) / 1e6
+          );
+        } else {
+          audioSourceNode.start((frame.timestamp! - currentTimeInMicros) / 1e6);
+        }
+      }
+    }
+    // Decode more frames (if we now have more space in the queue)
+    this.#decodeAudio();
+  }
+
   #resetAudioDecoder(): void {
     for (const frame of this.#decodedAudioFrames) {
       frame.close();
