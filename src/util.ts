@@ -24,21 +24,27 @@ export function queueTask(fn: () => void): void {
 
 export function waitForEvent(
   target: EventTarget,
-  type: string,
+  types: string | string[],
   signal?: AbortSignal
 ): Promise<Event> {
+  types = Array.isArray(types) ? types : [types];
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
       return reject(signal.reason);
     }
     const listener = (event: Event) => {
+      for (const type of types) {
+        target.removeEventListener(type, listener);
+      }
       signal?.removeEventListener("abort", abortListener);
       resolve(event);
     };
     const abortListener = () => {
       reject(signal!.reason);
     };
-    target.addEventListener(type, listener, { once: true, signal });
+    for (const type of types) {
+      target.addEventListener(type, listener, { once: true, signal });
+    }
     signal?.addEventListener("abort", abortListener, { once: true });
   });
 }
@@ -134,4 +140,9 @@ export class Deferred<T> {
   readonly #handleAbort = (event: Event) => {
     this.reject((event.target as AbortSignal).reason);
   };
+}
+
+export enum Direction {
+  FORWARD = 1,
+  BACKWARD = -1,
 }

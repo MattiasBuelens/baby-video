@@ -82,16 +82,18 @@ export class BabyMediaSource extends EventTarget {
     return this.#sourceBuffers;
   }
 
+  static isTypeSupported(type: string): boolean {
+    // https://w3c.github.io/media-source/#dom-mediasource-istypesupported
+    return type.startsWith("audio/mp4") || type.startsWith("video/mp4");
+  }
+
   addSourceBuffer(type: string): BabySourceBuffer {
     // https://w3c.github.io/media-source/#dom-mediasource-addsourcebuffer
     // 1. If type is an empty string then throw a TypeError exception and abort these steps.
     // 2. If type contains a MIME type that is not supported or contains a MIME type that is not supported
     //    with the types specified for the other SourceBuffer objects in sourceBuffers,
     //    then throw a NotSupportedError exception and abort these steps.
-    if (
-      type === "" ||
-      !(type.startsWith("audio/mp4") || type.startsWith("video/mp4"))
-    ) {
+    if (!BabyMediaSource.isTypeSupported(type)) {
       throw new DOMException(
         `Unsupported MIME type: ${type}`,
         "NotSupportedError"
