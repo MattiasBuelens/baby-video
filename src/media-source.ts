@@ -1,4 +1,8 @@
-import {BabySourceBuffer, getAudioTrackBuffer, getVideoTrackBuffer} from "./source-buffer";
+import {
+  BabySourceBuffer,
+  getAudioTrackBuffer,
+  getVideoTrackBuffer
+} from "./source-buffer";
 import {
   BabyVideoElement,
   MediaReadyState,
@@ -7,7 +11,7 @@ import {
   updateReadyState
 } from "./video-element";
 import { queueTask } from "./util";
-import {AudioTrackBuffer, VideoTrackBuffer} from "./track-buffer";
+import { AudioTrackBuffer, VideoTrackBuffer } from "./track-buffer";
 import { setEndTimeOnLastRange, TimeRanges } from "./time-ranges";
 
 export type MediaSourceReadyState = "closed" | "ended" | "open";
@@ -33,7 +37,7 @@ export let getActiveVideoTrackBuffer: (
   mediaSource: BabyMediaSource
 ) => VideoTrackBuffer | undefined;
 export let getActiveAudioTrackBuffer: (
-    mediaSource: BabyMediaSource
+  mediaSource: BabyMediaSource
 ) => AudioTrackBuffer | undefined;
 export let openIfEnded: (mediaSource: BabyMediaSource) => void;
 export let checkBuffer: (mediaSource: BabyMediaSource) => void;
@@ -326,7 +330,7 @@ export class BabyMediaSource extends EventTarget {
     getActiveVideoTrackBuffer = (mediaSource) =>
       mediaSource.#getActiveVideoTrackBuffer();
     getActiveAudioTrackBuffer = (mediaSource) =>
-        mediaSource.#getActiveAudioTrackBuffer();
+      mediaSource.#getActiveAudioTrackBuffer();
     checkBuffer = (mediaSource) => mediaSource.#checkBuffer();
   }
 }

@@ -10,7 +10,7 @@ export function toUint8Array(data: BufferSource): Uint8Array {
 
 export function concatUint8Arrays(
   left: Uint8Array,
-  right: Uint8Array,
+  right: Uint8Array
 ): Uint8Array {
   const result = new Uint8Array(left.byteLength + right.byteLength);
   result.set(left, 0);
@@ -25,7 +25,7 @@ export function queueTask(fn: () => void): void {
 export function waitForEvent(
   target: EventTarget,
   types: string | string[],
-  signal?: AbortSignal,
+  signal?: AbortSignal
 ): Promise<Event> {
   types = Array.isArray(types) ? types : [types];
   return new Promise((resolve, reject) => {
@@ -56,7 +56,7 @@ export function isDefined<T>(x: T | undefined): x is T {
 export function binarySearch<T>(
   array: readonly T[],
   key: number,
-  keySelector: (v: T) => number,
+  keySelector: (v: T) => number
 ): number {
   // Original from TypeScript by Microsoft
   // License: Apache 2.0
@@ -81,7 +81,7 @@ export function insertSorted<T>(
   array: T[],
   insert: T,
   keySelector: (v: T) => number,
-  allowDuplicates?: boolean,
+  allowDuplicates?: boolean
 ): void {
   // Original from TypeScript by Microsoft
   // License: Apache 2.0
@@ -144,5 +144,5 @@ export class Deferred<T> {
 
 export enum Direction {
   FORWARD = 1,
-  BACKWARD = -1,
+  BACKWARD = -1
 }

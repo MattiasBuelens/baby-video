@@ -4,12 +4,17 @@ import {
   BabyMediaSource,
   checkBuffer,
   detachFromMediaElement,
+  getActiveAudioTrackBuffer,
   getActiveVideoTrackBuffer,
   getBuffered
 } from "./media-source";
 import { Deferred, Direction, queueTask, waitForEvent } from "./util";
 import { TimeRange, TimeRanges } from "./time-ranges";
-import { VideoDecodeQueue } from "./track-buffer";
+import {
+  AudioDecodeQueue,
+  EncodedChunk,
+  VideoDecodeQueue
+} from "./track-buffer";
 
 const template = document.createElement("template");
 template.innerHTML = `<style>${stylesheet}</style>`;
@@ -72,6 +77,11 @@ export class BabyVideoElement extends HTMLElement {
   #lastRenderedFrame: number | undefined = undefined;
   #nextRenderFrame: number = 0;
 
+  readonly #audioDecoder: AudioDecoder;
+  #lastAudioDecoderConfig: AudioDecoderConfig | undefined = undefined;
+  #furthestDecodedAudioFrame: EncodedAudioChunk | undefined = undefined;
+  #decodingAudioFrames: EncodedAudioChunk[] = [];
+  #decodedAudioFrames: AudioData[] = [];
   constructor() {
     super();
 
@@ -93,6 +103,11 @@ export class BabyVideoElement extends HTMLElement {
     }
     this.#videoDecoder = new VideoDecoder({
       output: (frame) => this.#onVideoFrame(frame),
+      error: (error) => console.error("WTF", error)
+    });
+
+    this.#audioDecoder = new AudioDecoder({
+      output: (data) => this.#onAudioData(data),
       error: (error) => console.error("WTF", error)
     });
   }
@@ -157,6 +172,7 @@ export class BabyVideoElement extends HTMLElement {
     const currentTime = this.#getCurrentPlaybackPosition(performance.now());
     if (Math.sign(value) !== Math.sign(this.#playbackRate)) {
       this.#resetVideoDecoder();
+      this.#resetAudioDecoder();
     }
     this.#playbackRate = value;
     this.#updateCurrentTime(currentTime);
@@ -372,6 +388,7 @@ export class BabyVideoElement extends HTMLElement {
   #updateCurrentTime(currentTime: number) {
     this.#currentTime = currentTime;
     this.#decodeVideoFrames();
+    this.#decodeAudio();
     if (this.#srcObject) {
       checkBuffer(this.#srcObject);
     }
@@ -482,6 +499,7 @@ export class BabyVideoElement extends HTMLElement {
     queueTask(() => this.dispatchEvent(new Event("seeking")));
     // 11. Set the current playback position to the new playback position.
     this.#resetVideoDecoder();
+    this.#resetAudioDecoder();
     this.#updateCurrentTime(newPosition);
     this.#updatePlaying();
     // 12. Wait until the user agent has established whether or not the media data for the new playback position
@@ -646,7 +664,7 @@ export class BabyVideoElement extends HTMLElement {
   }
 
   #isFrameBeyondTime(
-    frame: EncodedVideoChunk | VideoFrame,
+    frame: EncodedChunk | AudioData | VideoFrame,
     direction: Direction,
     timeInMicros: number
   ): boolean {
@@ -715,6 +733,107 @@ export class BabyVideoElement extends HTMLElement {
     this.#decodingVideoFrames.length = 0;
     this.#decodedVideoFrames.length = 0;
     this.#videoDecoder.reset();
+  }
+
+  #decodeAudio(): void {
+    const mediaSource = this.#srcObject;
+    if (!mediaSource) {
+      return;
+    }
+    const audioTrackBuffer = getActiveAudioTrackBuffer(mediaSource);
+    if (!audioTrackBuffer) {
+      return;
+    }
+    const direction =
+      this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
+    // Decode audio for current time
+    if (this.#furthestDecodedAudioFrame === undefined) {
+      const frameAtTime = audioTrackBuffer.findFrameForTime(this.currentTime);
+      if (frameAtTime === undefined) {
+        return;
+      }
+      this.#processAudioDecodeQueue(
+        audioTrackBuffer.getDecodeDependenciesForFrame(frameAtTime),
+        direction
+      );
+    }
+    // Decode next frames in advance
+    while (
+      this.#decodingAudioFrames.length + this.#decodedAudioFrames.length <
+      decodeQueueLwm
+    ) {
+      const nextQueue = audioTrackBuffer.getNextFrames(
+        this.#furthestDecodedAudioFrame!,
+        decodeQueueHwm -
+          (this.#decodingAudioFrames.length + this.#decodedAudioFrames.length),
+        direction
+      );
+      if (nextQueue === undefined) {
+        break;
+      }
+      this.#processAudioDecodeQueue(nextQueue, direction);
+    }
+  }
+
+  #processAudioDecodeQueue(
+    decodeQueue: AudioDecodeQueue,
+    direction: Direction
+  ): void {
+    if (
+      this.#audioDecoder.state === "unconfigured" ||
+      this.#lastAudioDecoderConfig !== decodeQueue.codecConfig
+    ) {
+      this.#audioDecoder.configure(decodeQueue.codecConfig);
+      this.#lastAudioDecoderConfig = decodeQueue.codecConfig;
+    }
+    for (const frame of decodeQueue.frames) {
+      this.#audioDecoder.decode(frame);
+      this.#decodingAudioFrames.push(frame);
+    }
+    if (direction == Direction.FORWARD) {
+      this.#furthestDecodedAudioFrame =
+        decodeQueue.frames[decodeQueue.frames.length - 1];
+    } else {
+      this.#furthestDecodedAudioFrame = decodeQueue.frames[0];
+    }
+  }
+
+  #onAudioData(frame: AudioData): void {
+    const decodingFrameIndex = this.#decodingAudioFrames.findIndex(
+      (x) => x.timestamp === frame.timestamp
+    );
+    if (decodingFrameIndex < 0) {
+      // Drop frames that are no longer in the decode queue.
+      frame.close();
+      return;
+    }
+    const decodingFrame = this.#decodingAudioFrames[decodingFrameIndex];
+    this.#decodingAudioFrames.splice(decodingFrameIndex, 1);
+    // Drop frames that are beyond current time, since we're too late to render them.
+    const currentTimeInMicros = 1e6 * this.#currentTime;
+    const direction =
+      this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
+    if (
+      this.#isFrameBeyondTime(decodingFrame, direction, currentTimeInMicros)
+    ) {
+      frame.close();
+      // Decode more frames (if we now have more space in the queue)
+      this.#decodeAudio();
+      return;
+    }
+    this.#decodedAudioFrames.push(frame);
+    // Decode more frames (if we now have more space in the queue)
+    this.#decodeAudio();
+  }
+  #resetAudioDecoder(): void {
+    for (const frame of this.#decodedAudioFrames) {
+      frame.close();
+    }
+    this.#lastAudioDecoderConfig = undefined;
+    this.#furthestDecodedAudioFrame = undefined;
+    this.#decodingAudioFrames.length = 0;
+    this.#decodedAudioFrames.length = 0;
+    this.#audioDecoder.reset();
   }
 
   #isPotentiallyPlaying(): boolean {

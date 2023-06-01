@@ -188,6 +188,32 @@ declare module "mp4box" {
     type: "avcC";
   }
 
+  export interface Mp4aBox extends Box {
+    type: "mp4a";
+    esds: EsdsBox;
+  }
+
+  export interface EsdsBox extends Box {
+    type: "esds";
+    esd: ES_Descriptor;
+  }
+
+  export interface ES_Descriptor {
+    descs: [DecoderConfigDescriptor, ...any[]];
+  }
+
+  export interface DecoderConfigDescriptor {
+    oti: number;
+    streamType: number;
+    tag: number;
+    descs: [DecoderSpecificInfo, ...any[]];
+  }
+
+  export interface DecoderSpecificInfo {
+    tag: number;
+    data: Uint8Array;
+  }
+
   export interface ExtractionOptions {
     nbSamples?: number;
   }

@@ -8,6 +8,7 @@ import {
   DataStream,
   Info,
   ISOFile,
+  Mp4aBox,
   MP4ArrayBuffer,
   MP4BoxStream,
   Sample,
@@ -358,7 +359,9 @@ export class BabySourceBuffer extends EventTarget {
         return;
       }
       // * The codecs for each track are supported by the user agent.
-      const audioTrackConfigs = info.audioTracks.map(buildAudioConfig);
+      const audioTrackConfigs = info.audioTracks.map((trackInfo) =>
+        buildAudioConfig(trackInfo, this.#isoFile!.getTrackById(trackInfo.id))
+      );
       const videoTrackConfigs = info.videoTracks.map((trackInfo) =>
         buildVideoConfig(trackInfo, this.#isoFile!.getTrackById(trackInfo.id))
       );
@@ -402,7 +405,9 @@ export class BabySourceBuffer extends EventTarget {
       // 5.1. If the initialization segment contains tracks with codecs
       //      the user agent does not support, then run the append error
       //      algorithm and abort these steps.
-      const audioTrackConfigs = info.audioTracks.map(buildAudioConfig);
+      const audioTrackConfigs = info.audioTracks.map((trackInfo) =>
+        buildAudioConfig(trackInfo, this.#isoFile!.getTrackById(trackInfo.id))
+      );
       const videoTrackConfigs = info.videoTracks.map((trackInfo) =>
         buildVideoConfig(trackInfo, this.#isoFile!.getTrackById(trackInfo.id))
       );
@@ -758,11 +763,15 @@ function toMP4ArrayBuffer(ab: ArrayBuffer, fileStart: number): MP4ArrayBuffer {
   return Object.assign(ab, { fileStart });
 }
 
-function buildAudioConfig(info: AudioTrackInfo): AudioDecoderConfig {
+function buildAudioConfig(
+  info: AudioTrackInfo,
+  trak: TrakBox
+): AudioDecoderConfig {
   return {
     codec: info.codec,
     numberOfChannels: info.audio.channel_count,
-    sampleRate: info.audio.sample_rate
+    sampleRate: info.audio.sample_rate,
+    description: getAudioSpecificConfig(trak)
   };
 }
 
@@ -782,6 +791,10 @@ function isAvcEntry(entry: Box): entry is AvcBox {
   return (entry as AvcBox).avcC !== undefined;
 }
 
+function isMp4aEntry(entry: Box): entry is Mp4aBox {
+  return entry.type === "mp4a";
+}
+
 function createAvcDecoderConfigurationRecord(
   trak: TrakBox
 ): Uint8Array | undefined {
@@ -793,6 +806,21 @@ function createAvcDecoderConfigurationRecord(
   const stream = new DataStream(undefined, 0, DataStream.BIG_ENDIAN);
   avcC.write(stream);
   return new Uint8Array(stream.buffer, 8); // remove the box header
+}
+
+function getAudioSpecificConfig(trak: TrakBox): Uint8Array | undefined {
+  const descriptor =
+    trak.mdia.minf.stbl.stsd.entries.find(isMp4aEntry)?.esds.esd.descs[0];
+  if (!descriptor) {
+    return undefined;
+  }
+  // 0x04 is the DecoderConfigDescrTag. Assuming MP4Box always puts this at position 0.
+  console.assert(descriptor.tag == 0x04);
+  // 0x40 is the Audio OTI, per table 5 of ISO 14496-1
+  console.assert(descriptor.oti == 0x40);
+  // 0x05 is the DecSpecificInfoTag
+  console.assert(descriptor.descs[0].tag == 0x05);
+  return descriptor.descs[0].data;
 }
 
 function hasMatchingTrackIds(
