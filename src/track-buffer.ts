@@ -141,7 +141,7 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
     frame: EncodedAudioChunk,
     maxAmount: number,
     _direction: Direction
-  ): DecodeQueue | undefined {
+  ): AudioDecodeQueue | undefined {
     const frameIndex = this.#frames.indexOf(frame);
     if (frameIndex < 0 || frameIndex === this.#frames.length - 1) {
       return undefined;
@@ -271,7 +271,7 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
     frame: EncodedVideoChunk,
     maxAmount: number,
     direction: Direction
-  ): DecodeQueue | undefined {
+  ): VideoDecodeQueue | undefined {
     let gopIndex = this.#gops.findIndex((gop) => {
       return gop.frames.includes(frame);
     })!;

@@ -1,4 +1,4 @@
-import { BabySourceBuffer, getVideoTrackBuffer } from "./source-buffer";
+import {BabySourceBuffer, getAudioTrackBuffer, getVideoTrackBuffer} from "./source-buffer";
 import {
   BabyVideoElement,
   MediaReadyState,
@@ -7,7 +7,7 @@ import {
   updateReadyState
 } from "./video-element";
 import { queueTask } from "./util";
-import { VideoTrackBuffer } from "./track-buffer";
+import {AudioTrackBuffer, VideoTrackBuffer} from "./track-buffer";
 import { setEndTimeOnLastRange, TimeRanges } from "./time-ranges";
 
 export type MediaSourceReadyState = "closed" | "ended" | "open";
@@ -32,6 +32,9 @@ export let getBuffered: (mediaSource: BabyMediaSource) => TimeRanges;
 export let getActiveVideoTrackBuffer: (
   mediaSource: BabyMediaSource
 ) => VideoTrackBuffer | undefined;
+export let getActiveAudioTrackBuffer: (
+    mediaSource: BabyMediaSource
+) => AudioTrackBuffer | undefined;
 export let openIfEnded: (mediaSource: BabyMediaSource) => void;
 export let checkBuffer: (mediaSource: BabyMediaSource) => void;
 
@@ -222,6 +225,16 @@ export class BabyMediaSource extends EventTarget {
     return undefined;
   }
 
+  #getActiveAudioTrackBuffer(): AudioTrackBuffer | undefined {
+    for (const sourceBuffer of this.#sourceBuffers) {
+      const audioTrackBuffer = getAudioTrackBuffer(sourceBuffer);
+      if (audioTrackBuffer) {
+        return audioTrackBuffer;
+      }
+    }
+    return undefined;
+  }
+
   #getBuffered(): TimeRanges {
     // https://w3c.github.io/media-source/#htmlmediaelement-extensions-buffered
     // 2.1. Let recent intersection ranges equal an empty TimeRanges object.
@@ -312,6 +325,8 @@ export class BabyMediaSource extends EventTarget {
     openIfEnded = (mediaSource) => mediaSource.#openIfEnded();
     getActiveVideoTrackBuffer = (mediaSource) =>
       mediaSource.#getActiveVideoTrackBuffer();
+    getActiveAudioTrackBuffer = (mediaSource) =>
+        mediaSource.#getActiveAudioTrackBuffer();
     checkBuffer = (mediaSource) => mediaSource.#checkBuffer();
   }
 }

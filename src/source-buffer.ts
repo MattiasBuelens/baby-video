@@ -37,6 +37,9 @@ import { setEndTimeOnLastRange, TimeRanges } from "./time-ranges";
 export let getVideoTrackBuffer: (
   sourceBuffer: BabySourceBuffer
 ) => VideoTrackBuffer | undefined;
+export let getAudioTrackBuffer: (
+  sourceBuffer: BabySourceBuffer
+) => AudioTrackBuffer | undefined;
 
 export class BabySourceBuffer extends EventTarget {
   readonly #parent: BabyMediaSource;
@@ -738,8 +741,16 @@ export class BabySourceBuffer extends EventTarget {
     );
   }
 
+  #getAudioTrackBuffer(): AudioTrackBuffer | undefined {
+    return this.#trackBuffers.find(
+      (trackBuffer): trackBuffer is AudioTrackBuffer =>
+        trackBuffer instanceof AudioTrackBuffer
+    );
+  }
+
   static {
     getVideoTrackBuffer = (sourceBuffer) => sourceBuffer.#getVideoTrackBuffer();
+    getAudioTrackBuffer = (sourceBuffer) => sourceBuffer.#getAudioTrackBuffer();
   }
 }
 
