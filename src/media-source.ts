@@ -4,7 +4,7 @@ import {
   MediaReadyState,
   notifyEndOfStream,
   updateDuration,
-  updateReadyState,
+  updateReadyState
 } from "./video-element";
 import { queueTask } from "./util";
 import { VideoTrackBuffer } from "./track-buffer";

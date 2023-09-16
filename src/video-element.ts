@@ -5,7 +5,7 @@ import {
   checkBuffer,
   detachFromMediaElement,
   getActiveVideoTrackBuffer,
-  getBuffered,
+  getBuffered
 } from "./media-source";
 import { Deferred, Direction, queueTask, waitForEvent } from "./util";
 import { TimeRange, TimeRanges } from "./time-ranges";
@@ -19,7 +19,7 @@ export enum MediaReadyState {
   HAVE_METADATA,
   HAVE_CURRENT_DATA,
   HAVE_FUTURE_DATA,
-  HAVE_ENOUGH_DATA,
+  HAVE_ENOUGH_DATA
 }
 
 export let updateDuration: (
@@ -90,7 +90,7 @@ export class BabyVideoElement extends HTMLElement {
 
     this.#videoDecoder = new VideoDecoder({
       output: (frame) => this.#onVideoFrame(frame),
-      error: (error) => console.error("WTF", error),
+      error: (error) => console.error("WTF", error)
     });
   }
 
@@ -326,7 +326,7 @@ export class BabyVideoElement extends HTMLElement {
       if (!isNaN(this.#lastPlayedTime)) {
         const newRange: TimeRange = [
           Math.min(this.#currentTime, this.#lastPlayedTime),
-          Math.max(this.#currentTime, this.#lastPlayedTime),
+          Math.max(this.#currentTime, this.#lastPlayedTime)
         ];
         this.#played = this.#played.union(new TimeRanges([newRange]));
       }
@@ -625,7 +625,7 @@ export class BabyVideoElement extends HTMLElement {
     );
     const newFrame = new VideoFrame(bitmap, {
       timestamp: decodingFrame.timestamp,
-      duration: decodingFrame.duration!,
+      duration: decodingFrame.duration!
     });
     frame.close();
     frame = newFrame;

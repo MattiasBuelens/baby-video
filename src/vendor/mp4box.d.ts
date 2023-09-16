@@ -32,7 +32,7 @@ declare module "mp4box" {
   export enum BoxParser {
     ERR_INVALID_DATA = -1,
     ERR_NOT_ENOUGH_DATA = 0,
-    OK = 1,
+    OK = 1
   }
 
   export interface BoxResult {

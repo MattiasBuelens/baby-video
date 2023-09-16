@@ -116,7 +116,7 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
       timestamp: (1e6 * sample.cts) / sample.timescale,
       duration: (1e6 * sample.duration) / sample.timescale,
       data: sample.data,
-      type: sample.is_sync ? "key" : "delta",
+      type: sample.is_sync ? "key" : "delta"
     });
     insertSorted(this.#frames, frame, (x) => x.timestamp);
   }
@@ -133,7 +133,7 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
   getDecodeDependenciesForFrame(frame: EncodedAudioChunk): AudioDecodeQueue {
     return {
       frames: [frame],
-      codecConfig: this.codecConfig,
+      codecConfig: this.codecConfig
     };
   }
 
@@ -149,7 +149,7 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
     const nextIndex = frameIndex + 1;
     return {
       frames: this.#frames.slice(nextIndex, nextIndex + maxAmount),
-      codecConfig: this.codecConfig,
+      codecConfig: this.codecConfig
     };
   }
 
@@ -176,7 +176,7 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
     this.trackBufferRanges = new TimeRanges(
       this.#frames.map((frame) => [
         frame.timestamp! / 1e6,
-        (frame.timestamp! + frame.duration!) / 1e6,
+        (frame.timestamp! + frame.duration!) / 1e6
       ])
     ).mergeOverlaps(BUFFERED_TOLERANCE);
   }
@@ -208,14 +208,14 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
       timestamp: (1e6 * sample.cts) / sample.timescale,
       duration: (1e6 * sample.duration) / sample.timescale,
       data: sample.data,
-      type: sample.is_sync ? "key" : "delta",
+      type: sample.is_sync ? "key" : "delta"
     });
     if (this.#currentGop === undefined || frame.type === "key") {
       const gop: GroupOfPictures = {
         start: frame.timestamp,
         end: frame.timestamp + frame.duration!,
         frames: [frame],
-        codecConfig: this.codecConfig,
+        codecConfig: this.codecConfig
       };
       this.#currentGop = gop;
       insertSorted(this.#gops, gop, (x) => x.start);
@@ -263,7 +263,7 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
     let endIndex = containingGop.frames.indexOf(frame);
     return {
       frames: containingGop.frames.slice(startIndex, endIndex + 1),
-      codecConfig: containingGop.codecConfig,
+      codecConfig: containingGop.codecConfig
     };
   }
 
@@ -295,7 +295,7 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
       }
       return {
         frames: nextGop.frames.slice(nextIndex, nextIndex + maxAmount),
-        codecConfig: nextGop.codecConfig,
+        codecConfig: nextGop.codecConfig
       };
     } else {
       if (frameIndex > 0) {
@@ -310,7 +310,7 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
       }
       return {
         frames: nextGop.frames.slice(0, nextIndex),
-        codecConfig: nextGop.codecConfig,
+        codecConfig: nextGop.codecConfig
       };
     }
   }

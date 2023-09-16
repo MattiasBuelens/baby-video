@@ -13,24 +13,24 @@ import {
   Sample,
   TrackInfo,
   TrakBox,
-  VideoTrackInfo,
+  VideoTrackInfo
 } from "mp4box";
 import type { BabyMediaSource } from "./media-source";
 import {
   durationChange,
   endOfStream,
   getMediaElement,
-  openIfEnded,
+  openIfEnded
 } from "./media-source";
 import {
   AudioTrackBuffer,
   TrackBuffer,
-  VideoTrackBuffer,
+  VideoTrackBuffer
 } from "./track-buffer";
 import {
   MediaReadyState,
   notifyProgress,
-  updateReadyState,
+  updateReadyState
 } from "./video-element";
 import { setEndTimeOnLastRange, TimeRanges } from "./time-ranges";
 
@@ -751,7 +751,7 @@ function buildAudioConfig(info: AudioTrackInfo): AudioDecoderConfig {
   return {
     codec: info.codec,
     numberOfChannels: info.audio.channel_count,
-    sampleRate: info.audio.sample_rate,
+    sampleRate: info.audio.sample_rate
   };
 }
 
@@ -763,7 +763,7 @@ function buildVideoConfig(
     codec: info.codec,
     codedWidth: info.video.width,
     codedHeight: info.video.height,
-    description: createAvcDecoderConfigurationRecord(trak),
+    description: createAvcDecoderConfigurationRecord(trak)
   };
 }
 
