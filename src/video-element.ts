@@ -837,7 +837,7 @@ export class BabyVideoElement extends HTMLElement {
   #initializeAudio(sampleRate: number): AudioContext {
     this.#audioContext = new AudioContext({
       sampleRate: sampleRate,
-      latencyHint: "playback",
+      latencyHint: "playback"
     });
 
     this.#volumeGainNode = new GainNode(this.#audioContext);
@@ -878,13 +878,13 @@ export class BabyVideoElement extends HTMLElement {
         const audioBuffer = new AudioBuffer({
           numberOfChannels: frame.numberOfChannels,
           length: frame.numberOfFrames,
-          sampleRate: frame.sampleRate,
+          sampleRate: frame.sampleRate
         });
         for (let channel = 0; channel < frame.numberOfChannels; channel++) {
           const destination = audioBuffer.getChannelData(channel);
           frame.copyTo(destination, {
             format: frame.format,
-            planeIndex: channel,
+            planeIndex: channel
           });
         }
         const audioSourceNode = this.#audioContext.createBufferSource();

@@ -2,7 +2,7 @@ import "media-chrome";
 import {
   BabyMediaSource,
   BabySourceBuffer,
-  BabyVideoElement,
+  BabyVideoElement
 } from "../src/index";
 import { TimeRanges } from "../src/time-ranges";
 import { waitForEvent } from "../src/util";
@@ -45,14 +45,14 @@ const videoSegmentURLs = [
   "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps_1920x1080_8000k/bbb_30fps_1920x1080_8000k_0.m4v",
   "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps_1920x1080_8000k/bbb_30fps_1920x1080_8000k_2.m4v",
   "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps_1920x1080_8000k/bbb_30fps_1920x1080_8000k_3.m4v",
-  "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps_1920x1080_8000k/bbb_30fps_1920x1080_8000k_4.m4v",
+  "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps_1920x1080_8000k/bbb_30fps_1920x1080_8000k_4.m4v"
 ];
 const audioSegmentURLs = [
   "https://dash.akamaized.net/akamai/bbb_30fps/bbb_a64k/bbb_a64k_0.m4a",
   "https://dash.akamaized.net/akamai/bbb_30fps/bbb_a64k/bbb_a64k_1.m4a",
   "https://dash.akamaized.net/akamai/bbb_30fps/bbb_a64k/bbb_a64k_2.m4a",
   "https://dash.akamaized.net/akamai/bbb_30fps/bbb_a64k/bbb_a64k_3.m4a",
-  "https://dash.akamaized.net/akamai/bbb_30fps/bbb_a64k/bbb_a64k_4.m4a",
+  "https://dash.akamaized.net/akamai/bbb_30fps/bbb_a64k/bbb_a64k_4.m4a"
 ];
 
 async function appendSegments(
@@ -68,7 +68,7 @@ async function appendSegments(
 
 await Promise.all([
   appendSegments(videoSourceBuffer, videoSegmentURLs),
-  appendSegments(audioSourceBuffer, audioSegmentURLs),
+  appendSegments(audioSourceBuffer, audioSegmentURLs)
 ]);
 
 interface Segment {
@@ -98,7 +98,7 @@ function getSegmentForTime(
     startTime: segmentIndex * segmentDuration,
     endTime: (segmentIndex + 1) * segmentDuration,
     isFirst: segmentIndex === 0,
-    isLast: segmentIndex === lastSegmentIndex,
+    isLast: segmentIndex === lastSegmentIndex
   };
 }
 
@@ -197,7 +197,7 @@ async function bufferLoop(signal: AbortSignal) {
   await pendingBufferLoop;
   await Promise.allSettled([
     trackBufferLoop(videoSourceBuffer, getVideoSegmentForTime, signal),
-    trackBufferLoop(audioSourceBuffer, getAudioSegmentForTime, signal),
+    trackBufferLoop(audioSourceBuffer, getAudioSegmentForTime, signal)
   ]);
 }
 
