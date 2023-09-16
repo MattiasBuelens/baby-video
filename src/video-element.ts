@@ -88,6 +88,9 @@ export class BabyVideoElement extends HTMLElement {
     this.#canvasContext.fillStyle = "black";
     this.#canvasContext.fillRect(0, 0, this.#canvas.width, this.#canvas.height);
 
+    if (typeof VideoDecoder !== "function") {
+      throw new Error(`<baby-video>: This browser does not support WebCodecs.`);
+    }
     this.#videoDecoder = new VideoDecoder({
       output: (frame) => this.#onVideoFrame(frame),
       error: (error) => console.error("WTF", error)
