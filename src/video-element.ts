@@ -920,6 +920,11 @@ export class BabyVideoElement extends HTMLElement {
     audioSourceNode.buffer = audioBuffer;
     audioSourceNode.connect(this.#volumeGainNode!);
     this.#scheduledAudioSourceNodes.set(frame, audioSourceNode);
+    audioSourceNode.addEventListener("ended", () => {
+      if (this.#scheduledAudioSourceNodes.get(frame) === audioSourceNode) {
+        this.#scheduledAudioSourceNodes.delete(frame);
+      }
+    });
     if (frame.timestamp! < currentTimeInMicros) {
       audioSourceNode.start(0, (currentTimeInMicros - frame.timestamp!) / 1e6);
     } else {
@@ -931,10 +936,14 @@ export class BabyVideoElement extends HTMLElement {
     for (const frame of this.#decodedAudioFrames) {
       frame.close();
     }
+    for (const [_, audioSourceNode] of this.#scheduledAudioSourceNodes) {
+      audioSourceNode.stop();
+    }
     this.#lastAudioDecoderConfig = undefined;
     this.#furthestDecodedAudioFrame = undefined;
     this.#decodingAudioFrames.length = 0;
     this.#decodedAudioFrames.length = 0;
+    this.#scheduledAudioSourceNodes.clear();
     this.#audioDecoder.reset();
   }
 
