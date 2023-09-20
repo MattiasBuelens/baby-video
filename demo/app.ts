@@ -179,15 +179,14 @@ async function trackBufferLoop(
     ).arrayBuffer();
     sourceBuffer.appendBuffer(segmentData);
     await waitForEvent(sourceBuffer, "updateend");
+    // Check if we're done buffering
     if (forward) {
       if (nextSegment.isLast) {
-        // FIXME Wait for all tracks to reach last segment
-        mediaSource.endOfStream();
-        break; // Stop buffering until next seek
+        return; // Stop buffering until next seek
       }
     } else {
       if (nextSegment.isFirst) {
-        break; // Stop buffering until next seek
+        return; // Stop buffering until next seek
       }
     }
   }
@@ -199,6 +198,11 @@ async function bufferLoop(signal: AbortSignal) {
     trackBufferLoop(videoSourceBuffer, getVideoSegmentForTime, signal),
     trackBufferLoop(audioSourceBuffer, getAudioSegmentForTime, signal)
   ]);
+  // All tracks are done buffering until the last segment
+  const forward = video.playbackRate >= 0;
+  if (forward) {
+    mediaSource.endOfStream();
+  }
 }
 
 let bufferAbortController: AbortController = new AbortController();
