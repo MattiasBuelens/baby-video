@@ -872,37 +872,59 @@ export class BabyVideoElement extends HTMLElement {
       );
     });
     if (currentFrameIndex >= 0) {
-      const frame = this.#decodedAudioFrames[currentFrameIndex];
-      this.#audioContext ??= this.#initializeAudio(frame.sampleRate);
-      if (!this.#scheduledAudioSourceNodes.has(frame)) {
-        const audioBuffer = new AudioBuffer({
-          numberOfChannels: frame.numberOfChannels,
-          length: frame.numberOfFrames,
-          sampleRate: frame.sampleRate
-        });
-        for (let channel = 0; channel < frame.numberOfChannels; channel++) {
-          const destination = audioBuffer.getChannelData(channel);
-          frame.copyTo(destination, {
-            format: frame.format,
-            planeIndex: channel
-          });
+      const firstFrame = this.#decodedAudioFrames[currentFrameIndex];
+      this.#audioContext ??= this.#initializeAudio(firstFrame.sampleRate);
+      if (!this.#scheduledAudioSourceNodes.has(firstFrame)) {
+        this.#renderAudioFrame(firstFrame, currentTimeInMicros);
+      }
+      let previousFrame = firstFrame;
+      for (
+        let i = currentFrameIndex + 1;
+        i < this.#decodedAudioFrames.length;
+        i++
+      ) {
+        const frame = this.#decodedAudioFrames[i];
+        if (this.#scheduledAudioSourceNodes.has(frame)) {
+          continue;
         }
-        const audioSourceNode = this.#audioContext.createBufferSource();
-        audioSourceNode.buffer = audioBuffer;
-        audioSourceNode.connect(this.#volumeGainNode!);
-        this.#scheduledAudioSourceNodes.set(frame, audioSourceNode);
-        if (frame.timestamp! < currentTimeInMicros) {
-          audioSourceNode.start(
-            0,
-            (currentTimeInMicros - frame.timestamp!) / 1e6
-          );
+        if (
+          frame.timestamp! ===
+          previousFrame.timestamp! + previousFrame.duration!
+        ) {
+          this.#renderAudioFrame(frame, currentTimeInMicros);
         } else {
-          audioSourceNode.start((frame.timestamp! - currentTimeInMicros) / 1e6);
+          break;
         }
+        previousFrame = frame;
       }
     }
     // Decode more frames (if we now have more space in the queue)
     this.#decodeAudio();
+  }
+
+  #renderAudioFrame(frame: AudioData, currentTimeInMicros: number) {
+    const audioBuffer = new AudioBuffer({
+      numberOfChannels: frame.numberOfChannels,
+      length: frame.numberOfFrames,
+      sampleRate: frame.sampleRate
+    });
+    for (let channel = 0; channel < frame.numberOfChannels; channel++) {
+      const options = {
+        format: frame.format,
+        planeIndex: channel
+      };
+      const destination = audioBuffer.getChannelData(channel);
+      frame.copyTo(destination, options);
+    }
+    const audioSourceNode = this.#audioContext!.createBufferSource();
+    audioSourceNode.buffer = audioBuffer;
+    audioSourceNode.connect(this.#volumeGainNode!);
+    this.#scheduledAudioSourceNodes.set(frame, audioSourceNode);
+    if (frame.timestamp! < currentTimeInMicros) {
+      audioSourceNode.start(0, (currentTimeInMicros - frame.timestamp!) / 1e6);
+    } else {
+      audioSourceNode.start((frame.timestamp! - currentTimeInMicros) / 1e6);
+    }
   }
 
   #resetAudioDecoder(): void {
