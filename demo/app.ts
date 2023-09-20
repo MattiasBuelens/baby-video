@@ -55,6 +55,12 @@ const audioSegmentURLs = [
   "https://dash.akamaized.net/akamai/bbb_30fps/bbb_a64k/bbb_a64k_4.m4a"
 ];
 
+AbortSignal.prototype.throwIfAborted ??= function throwIfAborted(
+  this: AbortSignal
+) {
+  if (this.aborted) throw this.reason;
+};
+
 async function appendSegments(
   sourceBuffer: BabySourceBuffer,
   segmentURLs: string[]
@@ -129,7 +135,7 @@ async function trackBufferLoop(
   signal: AbortSignal
 ) {
   while (true) {
-    if (signal.aborted) throw signal.reason;
+    signal.throwIfAborted();
     // Check buffer health
     while (true) {
       const currentRange = sourceBuffer.buffered.find(video.currentTime);
@@ -198,6 +204,7 @@ async function bufferLoop(signal: AbortSignal) {
     trackBufferLoop(videoSourceBuffer, getVideoSegmentForTime, signal),
     trackBufferLoop(audioSourceBuffer, getAudioSegmentForTime, signal)
   ]);
+  signal.throwIfAborted();
   // All tracks are done buffering until the last segment
   const forward = video.playbackRate >= 0;
   if (forward) {
