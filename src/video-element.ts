@@ -647,8 +647,8 @@ export class BabyVideoElement extends HTMLElement {
   }
 
   async #onVideoFrame(frame: VideoFrame) {
-    const decodingFrameIndex = this.#decodingVideoFrames.findIndex(
-      (x) => x.timestamp === frame.timestamp
+    const decodingFrameIndex = this.#decodingVideoFrames.findIndex((x) =>
+      overlapsWithFrame(x, frame)
     );
     if (decodingFrameIndex < 0) {
       // Drop frames that are no longer in the decode queue.
@@ -817,8 +817,8 @@ export class BabyVideoElement extends HTMLElement {
   }
 
   #onAudioData(frame: AudioData): void {
-    const decodingFrameIndex = this.#decodingAudioFrames.findIndex(
-      (x) => x.timestamp === frame.timestamp
+    const decodingFrameIndex = this.#decodingAudioFrames.findIndex((x) =>
+      overlapsWithFrame(x, frame)
     );
     if (decodingFrameIndex < 0) {
       // Drop frames that are no longer in the decode queue.
@@ -1162,4 +1162,14 @@ function isFrameBeyondTime(
   } else {
     return frame.timestamp! >= timeInMicros;
   }
+}
+
+function overlapsWithFrame(
+  left: EncodedChunk | AudioData | VideoFrame,
+  right: EncodedChunk | AudioData | VideoFrame
+): boolean {
+  return (
+    left.timestamp < right.timestamp + right.duration! &&
+    right.timestamp < left.timestamp + left.duration!
+  );
 }
