@@ -92,7 +92,7 @@ export class BabyVideoElement extends HTMLElement {
   #decodedAudioFrames: AudioData[] = [];
 
   #audioContext: AudioContext | undefined;
-  #lastScheduledAudioFrame: AudioData | undefined = undefined;
+  #lastScheduledAudioFrameEndTime: number = -1;
   #scheduledAudioSourceNodes: AudioBufferSourceNode[] = [];
   #volumeGainNode: GainNode | undefined;
 
@@ -870,19 +870,13 @@ export class BabyVideoElement extends HTMLElement {
       if (isFrameBeyondTime(frame, direction, currentTimeInMicros)) {
         frame.close();
         arrayRemoveAt(this.#decodedAudioFrames, i);
-        if (this.#lastScheduledAudioFrame === frame) {
-          this.#lastScheduledAudioFrame = undefined;
-        }
       }
     }
     let nextFrameIndex: number = -1;
-    if (this.#lastScheduledAudioFrame !== undefined) {
+    if (this.#lastScheduledAudioFrameEndTime >= 0) {
       // Render the next frame.
-      const expectedStartTime =
-        this.#lastScheduledAudioFrame.timestamp +
-        this.#lastScheduledAudioFrame.duration;
       nextFrameIndex = this.#decodedAudioFrames.findIndex((frame) => {
-        return frame.timestamp! === expectedStartTime;
+        return frame.timestamp! === this.#lastScheduledAudioFrameEndTime;
       });
     }
     if (nextFrameIndex < 0) {
@@ -930,6 +924,7 @@ export class BabyVideoElement extends HTMLElement {
   }
 
   #renderAudioFrame(frames: AudioData[], currentTimeInMicros: number) {
+    // Create an AudioBuffer containing all frame data
     const { format, numberOfChannels, sampleRate, timestamp } = frames[0];
     const audioBuffer = new AudioBuffer({
       numberOfChannels,
@@ -953,6 +948,7 @@ export class BabyVideoElement extends HTMLElement {
         offset += size;
       }
     }
+    // Schedule an AudioBufferSourceNode to play the AudioBuffer
     const audioSourceNode = this.#audioContext!.createBufferSource();
     audioSourceNode.buffer = audioBuffer;
     audioSourceNode.connect(this.#volumeGainNode!);
@@ -965,7 +961,15 @@ export class BabyVideoElement extends HTMLElement {
       audioSourceNode.start((timestamp - currentTimeInMicros) / 1e6);
     }
     this.#scheduledAudioSourceNodes.push(audioSourceNode);
-    this.#lastScheduledAudioFrame = frames[frames.length - 1];
+    const lastFrame = frames[frames.length - 1];
+    this.#lastScheduledAudioFrameEndTime =
+      lastFrame.timestamp + lastFrame.duration;
+    // Close the frames, so the audio decoder can reclaim them.
+    for (let i = frames.length - 1; i >= 0; i--) {
+      const frame = frames[i];
+      frame.close();
+      arrayRemove(this.#decodedAudioFrames, frame);
+    }
   }
 
   #resetAudioDecoder(): void {
@@ -980,7 +984,7 @@ export class BabyVideoElement extends HTMLElement {
     this.#decodingAudioFrames.length = 0;
     this.#decodedAudioFrames.length = 0;
     this.#scheduledAudioSourceNodes.length = 0;
-    this.#lastScheduledAudioFrame = undefined;
+    this.#lastScheduledAudioFrameEndTime = -1;
     this.#audioDecoder.reset();
   }
 
