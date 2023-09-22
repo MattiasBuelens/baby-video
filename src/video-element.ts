@@ -925,7 +925,7 @@ export class BabyVideoElement extends HTMLElement {
 
   #renderAudioFrame(frames: AudioData[], currentTimeInMicros: number) {
     // Create an AudioBuffer containing all frame data
-    const { format, numberOfChannels, sampleRate, timestamp } = frames[0];
+    const { numberOfChannels, sampleRate, timestamp } = frames[0];
     const audioBuffer = new AudioBuffer({
       numberOfChannels,
       length: frames.reduce(
@@ -935,8 +935,8 @@ export class BabyVideoElement extends HTMLElement {
       sampleRate
     });
     for (let channel = 0; channel < numberOfChannels; channel++) {
-      const options = {
-        format,
+      const options: AudioDataCopyToOptions = {
+        format: "f32-planar",
         planeIndex: channel
       };
       const destination = audioBuffer.getChannelData(channel);
