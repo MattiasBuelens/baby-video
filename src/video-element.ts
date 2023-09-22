@@ -67,6 +67,7 @@ export class BabyVideoElement extends HTMLElement {
   #pendingPlayPromises: Array<Deferred<void>> = [];
   #advanceLoop: number = 0;
   #lastAdvanceTime: number = 0;
+  #lastAudioTimestamp: number = 0;
   #lastPlayedTime: number = NaN;
   #lastTimeUpdate: number = 0;
   #lastProgress: number = 0;
@@ -229,6 +230,7 @@ export class BabyVideoElement extends HTMLElement {
     this.#seeking = false;
     this.#seekAbortController.abort();
     this.#lastAdvanceTime = 0;
+    this.#lastAudioTimestamp = 0;
     this.#lastProgress = 0;
     this.#lastPlayedTime = NaN;
     clearTimeout(this.#nextProgressTimer);
@@ -373,6 +375,7 @@ export class BabyVideoElement extends HTMLElement {
       void this.#audioContext?.resume();
       if (this.#advanceLoop === 0) {
         this.#lastAdvanceTime = performance.now();
+        this.#lastAudioTimestamp = this.#audioContext?.currentTime ?? 0;
         this.#advanceLoop = requestAnimationFrame((now) => {
           this.#advanceCurrentTime(now);
         });
@@ -389,9 +392,18 @@ export class BabyVideoElement extends HTMLElement {
     // its current playback position must increase monotonically at the element's playbackRate units
     // of media time per unit time of the media timeline's clock.
     if (this.#isPotentiallyPlaying() && !this.#seeking) {
+      let elapsedTime: number;
+      // Use audio clock as sync, otherwise use wall-clock time.
+      if (
+        this.#audioContext !== undefined &&
+        this.#audioContext.state === "running"
+      ) {
+        elapsedTime = this.#audioContext.currentTime - this.#lastAudioTimestamp;
+      } else {
+        elapsedTime = (now - this.#lastAdvanceTime) / 1000;
+      }
       const newTime =
-        this.#currentTime +
-        (this.#playbackRate * Math.max(0, now - this.#lastAdvanceTime)) / 1000;
+        this.#currentTime + this.#playbackRate * Math.max(0, elapsedTime);
       // Do not advance outside the current buffered range.
       const currentRange = this.buffered.find(this.#currentTime)!;
       return Math.min(Math.max(currentRange[0], newTime), currentRange[1]);
@@ -466,6 +478,7 @@ export class BabyVideoElement extends HTMLElement {
     this.#renderVideoFrame();
     this.#renderAudio();
     this.#lastAdvanceTime = now;
+    this.#lastAudioTimestamp = this.#audioContext?.currentTime ?? 0;
     this.#timeMarchesOn(true, now);
     if (this.#isPotentiallyPlaying() && !this.#seeking) {
       this.#advanceLoop = requestAnimationFrame((now) =>
