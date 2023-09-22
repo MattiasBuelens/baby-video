@@ -10,6 +10,7 @@ import {
 } from "./media-source";
 import {
   arrayRemove,
+  arrayRemoveAt,
   Deferred,
   Direction,
   queueTask,
@@ -642,7 +643,7 @@ export class BabyVideoElement extends HTMLElement {
       return;
     }
     const decodingFrame = this.#decodingVideoFrames[decodingFrameIndex];
-    this.#decodingVideoFrames.splice(decodingFrameIndex, 1);
+    arrayRemoveAt(this.#decodingVideoFrames, decodingFrameIndex);
     // Drop frames that are beyond current time, since we're too late to render them.
     const currentTimeInMicros = 1e6 * this.#currentTime;
     const direction =
@@ -708,7 +709,7 @@ export class BabyVideoElement extends HTMLElement {
       const frame = this.#decodedVideoFrames[i];
       if (this.#isFrameBeyondTime(frame, direction, currentTimeInMicros)) {
         frame.close();
-        this.#decodedVideoFrames.splice(i, 1);
+        arrayRemoveAt(this.#decodedVideoFrames, i);
       }
     }
     // Render the frame at current time.
@@ -733,7 +734,7 @@ export class BabyVideoElement extends HTMLElement {
         frame.displayWidth,
         frame.displayHeight
       );
-      this.#decodedVideoFrames.splice(currentFrameIndex, 1);
+      arrayRemoveAt(this.#decodedVideoFrames, currentFrameIndex);
       this.#lastRenderedFrame = frame.timestamp!;
       frame.close();
     }
@@ -826,7 +827,7 @@ export class BabyVideoElement extends HTMLElement {
       return;
     }
     const decodingFrame = this.#decodingAudioFrames[decodingFrameIndex];
-    this.#decodingAudioFrames.splice(decodingFrameIndex, 1);
+    arrayRemoveAt(this.#decodingAudioFrames, decodingFrameIndex);
     // Drop frames that are beyond current time, since we're too late to render them.
     const currentTimeInMicros = 1e6 * this.#currentTime;
     const direction =
@@ -871,7 +872,7 @@ export class BabyVideoElement extends HTMLElement {
       const frame = this.#decodedAudioFrames[i];
       if (this.#isFrameBeyondTime(frame, direction, currentTimeInMicros)) {
         frame.close();
-        this.#decodedAudioFrames.splice(i, 1);
+        arrayRemoveAt(this.#decodedAudioFrames, i);
         if (this.#lastScheduledAudioFrame === frame) {
           this.#lastScheduledAudioFrame = undefined;
         }

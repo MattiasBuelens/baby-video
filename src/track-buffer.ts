@@ -1,6 +1,6 @@
 import { TimeRanges } from "./time-ranges";
 import { Sample } from "mp4box";
-import { Direction, insertSorted } from "./util";
+import { arrayRemoveAt, Direction, insertSorted } from "./util";
 
 const BUFFERED_TOLERANCE: number = 1 / 60;
 
@@ -163,7 +163,7 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
     for (let i = this.#frames.length - 1; i >= 0; i--) {
       const frame = this.#frames[i];
       if (frame.timestamp >= startInMicros && frame.timestamp < endInMicros) {
-        this.#frames.splice(i, 1);
+        arrayRemoveAt(this.#frames, i);
         didRemove = true;
       }
     }
@@ -338,7 +338,7 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
         // Keep entire GOP.
       } else if (removeFrom === 0) {
         // Remove entire GOP.
-        this.#gops.splice(i, 1);
+        arrayRemoveAt(this.#gops, i);
         didRemove = true;
       } else {
         // Remove some frames.
