@@ -648,9 +648,7 @@ export class BabyVideoElement extends HTMLElement {
     const currentTimeInMicros = 1e6 * this.#currentTime;
     const direction =
       this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
-    if (
-      this.#isFrameBeyondTime(decodingFrame, direction, currentTimeInMicros)
-    ) {
+    if (isFrameBeyondTime(decodingFrame, direction, currentTimeInMicros)) {
       frame.close();
       // Decode more frames (if we now have more space in the queue)
       this.#decodeVideoFrames();
@@ -679,18 +677,6 @@ export class BabyVideoElement extends HTMLElement {
     this.#decodeVideoFrames();
   }
 
-  #isFrameBeyondTime(
-    frame: EncodedChunk | AudioData | VideoFrame,
-    direction: Direction,
-    timeInMicros: number
-  ): boolean {
-    if (direction == Direction.FORWARD) {
-      return frame.timestamp! + frame.duration! <= timeInMicros;
-    } else {
-      return frame.timestamp! >= timeInMicros;
-    }
-  }
-
   #scheduleRenderVideoFrame() {
     if (this.#nextRenderFrame === 0) {
       this.#nextRenderFrame = requestAnimationFrame(() =>
@@ -707,7 +693,7 @@ export class BabyVideoElement extends HTMLElement {
     // Drop all frames that are before current time, since we're too late to render them.
     for (let i = this.#decodedVideoFrames.length - 1; i >= 0; i--) {
       const frame = this.#decodedVideoFrames[i];
-      if (this.#isFrameBeyondTime(frame, direction, currentTimeInMicros)) {
+      if (isFrameBeyondTime(frame, direction, currentTimeInMicros)) {
         frame.close();
         arrayRemoveAt(this.#decodedVideoFrames, i);
       }
@@ -832,9 +818,7 @@ export class BabyVideoElement extends HTMLElement {
     const currentTimeInMicros = 1e6 * this.#currentTime;
     const direction =
       this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
-    if (
-      this.#isFrameBeyondTime(decodingFrame, direction, currentTimeInMicros)
-    ) {
+    if (isFrameBeyondTime(decodingFrame, direction, currentTimeInMicros)) {
       frame.close();
       // Decode more frames (if we now have more space in the queue)
       this.#decodeAudio();
@@ -870,7 +854,7 @@ export class BabyVideoElement extends HTMLElement {
     // Drop all frames that are before current time, since we're too late to render them.
     for (let i = this.#decodedAudioFrames.length - 1; i >= 0; i--) {
       const frame = this.#decodedAudioFrames[i];
-      if (this.#isFrameBeyondTime(frame, direction, currentTimeInMicros)) {
+      if (isFrameBeyondTime(frame, direction, currentTimeInMicros)) {
         frame.close();
         arrayRemoveAt(this.#decodedAudioFrames, i);
         if (this.#lastScheduledAudioFrame === frame) {
@@ -1150,3 +1134,15 @@ export class BabyVideoElement extends HTMLElement {
 }
 
 customElements.define("baby-video", BabyVideoElement);
+
+function isFrameBeyondTime(
+  frame: EncodedChunk | AudioData | VideoFrame,
+  direction: Direction,
+  timeInMicros: number
+): boolean {
+  if (direction == Direction.FORWARD) {
+    return frame.timestamp! + frame.duration! <= timeInMicros;
+  } else {
+    return frame.timestamp! >= timeInMicros;
+  }
+}
