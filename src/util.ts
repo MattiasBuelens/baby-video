@@ -18,6 +18,20 @@ export function concatUint8Arrays(
   return result;
 }
 
+export function arrayRemove<T>(array: T[], element: T): void {
+  arrayRemoveAt(array, array.indexOf(element));
+}
+
+export function arrayRemoveAt<T>(array: T[], index: number): void {
+  if (index < 0) {
+    return;
+  } else if (index === 0) {
+    array.shift();
+  } else {
+    array.splice(index, 1);
+  }
+}
+
 export function queueTask(fn: () => void): void {
   setTimeout(fn, 0);
 }

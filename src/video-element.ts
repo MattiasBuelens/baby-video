@@ -8,7 +8,13 @@ import {
   getActiveVideoTrackBuffer,
   getBuffered
 } from "./media-source";
-import { Deferred, Direction, queueTask, waitForEvent } from "./util";
+import {
+  arrayRemove,
+  Deferred,
+  Direction,
+  queueTask,
+  waitForEvent
+} from "./util";
 import { TimeRange, TimeRanges } from "./time-ranges";
 import {
   AudioDecodeQueue,
@@ -84,7 +90,8 @@ export class BabyVideoElement extends HTMLElement {
   #decodedAudioFrames: AudioData[] = [];
 
   #audioContext: AudioContext | undefined;
-  #scheduledAudioSourceNodes: Map<AudioData, AudioBufferSourceNode> = new Map();
+  #lastScheduledAudioFrame: AudioData | undefined = undefined;
+  #scheduledAudioSourceNodes: AudioBufferSourceNode[] = [];
   #volumeGainNode: GainNode | undefined;
 
   constructor() {
@@ -865,59 +872,61 @@ export class BabyVideoElement extends HTMLElement {
       if (this.#isFrameBeyondTime(frame, direction, currentTimeInMicros)) {
         frame.close();
         this.#decodedAudioFrames.splice(i, 1);
+        if (this.#lastScheduledAudioFrame === frame) {
+          this.#lastScheduledAudioFrame = undefined;
+        }
       }
     }
-    // Render the frame at current time.
-    let currentFrameIndex = this.#decodedAudioFrames.findIndex((frame) => {
-      return (
-        frame.timestamp! <= currentTimeInMicros &&
-        currentTimeInMicros < frame.timestamp! + frame.duration!
-      );
-    });
-    if (currentFrameIndex < 0) {
+    let nextFrameIndex: number = -1;
+    if (this.#lastScheduledAudioFrame !== undefined) {
+      // Render the next frame.
+      const expectedStartTime =
+        this.#lastScheduledAudioFrame.timestamp +
+        this.#lastScheduledAudioFrame.duration;
+      nextFrameIndex = this.#decodedAudioFrames.findIndex((frame) => {
+        return frame.timestamp! === expectedStartTime;
+      });
+    }
+    if (nextFrameIndex < 0) {
+      // Render the frame at current time.
+      nextFrameIndex = this.#decodedAudioFrames.findIndex((frame) => {
+        return (
+          frame.timestamp! <= currentTimeInMicros &&
+          currentTimeInMicros < frame.timestamp! + frame.duration!
+        );
+      });
+    }
+    if (nextFrameIndex < 0) {
       // Decode more frames (if we now have more space in the queue)
       this.#decodeAudio();
       return;
     }
-    const frames: AudioData[] = [];
-    let firstFrame: AudioData | undefined;
+    // Collect as many consecutive audio frames as possible
+    // to schedule in a single batch.
+    const firstFrame = this.#decodedAudioFrames[nextFrameIndex];
+    const frames: AudioData[] = [firstFrame];
     for (
-      let frameIndex = currentFrameIndex;
+      let frameIndex = nextFrameIndex + 1;
       frameIndex < this.#decodedAudioFrames.length;
       frameIndex++
     ) {
       const frame = this.#decodedAudioFrames[frameIndex];
-      if (this.#scheduledAudioSourceNodes.has(frame)) {
-        if (firstFrame !== undefined) {
-          // We already have some frames we want to schedule.
-          // Don't overlap with existing schedule.
-          break;
-        }
-      } else if (firstFrame === undefined) {
-        // This is the first frame that hasn't been scheduled yet.
-        firstFrame = frame;
+      const previousFrame = frames[frames.length - 1];
+      if (
+        frame.timestamp! === previousFrame.timestamp + previousFrame.duration &&
+        frame.format === firstFrame.format &&
+        frame.numberOfChannels === firstFrame.numberOfChannels &&
+        frame.sampleRate === firstFrame.sampleRate
+      ) {
+        // This frame is consecutive with the previous frame.
         frames.push(frame);
       } else {
-        const previousFrame = frames[frames.length - 1];
-        if (
-          frame.timestamp! ===
-            previousFrame.timestamp + previousFrame.duration &&
-          frame.format === firstFrame.format &&
-          frame.numberOfChannels === firstFrame.numberOfChannels &&
-          frame.sampleRate === firstFrame.sampleRate
-        ) {
-          // This frame is consecutive with the previous frame.
-          frames.push(frame);
-        } else {
-          // This frame is not consecutive. We can't schedule this in the same batch.
-          break;
-        }
+        // This frame is not consecutive. We can't schedule this in the same batch.
+        break;
       }
     }
-    if (firstFrame !== undefined) {
-      this.#audioContext ??= this.#initializeAudio(firstFrame.sampleRate);
-      this.#renderAudioFrame(frames, currentTimeInMicros);
-    }
+    this.#audioContext ??= this.#initializeAudio(firstFrame.sampleRate);
+    this.#renderAudioFrame(frames, currentTimeInMicros);
     // Decode more frames (if we now have more space in the queue)
     this.#decodeAudio();
   }
@@ -949,36 +958,31 @@ export class BabyVideoElement extends HTMLElement {
     const audioSourceNode = this.#audioContext!.createBufferSource();
     audioSourceNode.buffer = audioBuffer;
     audioSourceNode.connect(this.#volumeGainNode!);
-    for (const frame of frames) {
-      this.#scheduledAudioSourceNodes.get(frame)?.stop();
-      this.#scheduledAudioSourceNodes.set(frame, audioSourceNode);
-    }
     audioSourceNode.addEventListener("ended", () => {
-      for (const frame of frames) {
-        if (this.#scheduledAudioSourceNodes.get(frame) === audioSourceNode) {
-          this.#scheduledAudioSourceNodes.delete(frame);
-        }
-      }
+      arrayRemove(this.#scheduledAudioSourceNodes, audioSourceNode);
     });
     if (timestamp < currentTimeInMicros) {
       audioSourceNode.start(0, (currentTimeInMicros - timestamp) / 1e6);
     } else {
       audioSourceNode.start((timestamp - currentTimeInMicros) / 1e6);
     }
+    this.#scheduledAudioSourceNodes.push(audioSourceNode);
+    this.#lastScheduledAudioFrame = frames[frames.length - 1];
   }
 
   #resetAudioDecoder(): void {
     for (const frame of this.#decodedAudioFrames) {
       frame.close();
     }
-    for (const [_, audioSourceNode] of this.#scheduledAudioSourceNodes) {
+    for (const audioSourceNode of this.#scheduledAudioSourceNodes) {
       audioSourceNode.stop();
     }
     this.#lastAudioDecoderConfig = undefined;
     this.#furthestDecodedAudioFrame = undefined;
     this.#decodingAudioFrames.length = 0;
     this.#decodedAudioFrames.length = 0;
-    this.#scheduledAudioSourceNodes.clear();
+    this.#scheduledAudioSourceNodes.length = 0;
+    this.#lastScheduledAudioFrame = undefined;
     this.#audioDecoder.reset();
   }
 
