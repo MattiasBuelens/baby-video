@@ -18,6 +18,8 @@
       ></media-loading-indicator>
       <media-control-bar>
         <media-play-button></media-play-button>
+        <media-mute-button></media-mute-button>
+        <media-volume-range></media-volume-range>
         <media-time-display showduration></media-time-display>
         <media-time-range></media-time-range>
         <media-fullscreen-button></media-fullscreen-button>
@@ -29,5 +31,24 @@
         >Source code on GitHub</a
       >
     </p>
+
+    <style>
+      media-mute-button + media-volume-range {
+        width: 0;
+        overflow: hidden;
+        padding-left: 0;
+        padding-right: 0;
+
+        /* Set the internal width so it reveals, not grows */
+        --media-range-track-width: 70px;
+        transition: width 0.2s ease-in;
+      }
+
+      /* Expand volume control when hovered or focused */
+      media-mute-button:is(:hover, :focus, :focus-within) + media-volume-range,
+      media-mute-button + media-volume-range:is(:hover, :focus, :focus-within) {
+        width: var(--media-range-track-width);
+      }
+    </style>
   </body>
 </html>
