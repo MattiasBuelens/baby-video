@@ -83,7 +83,7 @@ export class BabyVideoElement extends HTMLElement {
   #furthestDecodingVideoFrame: EncodedVideoChunk | undefined = undefined;
   #decodingVideoFrames: EncodedVideoChunk[] = [];
   #decodedVideoFrames: VideoFrame[] = [];
-  #nextDecodedFramePromise: Deferred<void> | undefined = undefined;
+  #nextDecodedVideoFramePromise: Deferred<void> | undefined = undefined;
   #lastRenderedFrame: number | undefined = undefined;
   #nextRenderFrame: number = 0;
 
@@ -92,6 +92,7 @@ export class BabyVideoElement extends HTMLElement {
   #audioDecoderTimestamp: number = 0;
   #furthestDecodedAudioFrame: EncodedAudioChunk | undefined = undefined;
   #decodingAudioFrames: EncodedAudioChunk[] = [];
+  #nextDecodedAudioFramePromise: Deferred<void> | undefined = undefined;
   #originalDecodingAudioFrames: WeakMap<EncodedAudioChunk, EncodedAudioChunk> =
     new WeakMap();
   #decodedAudioFrames: AudioData[] = [];
@@ -583,8 +584,10 @@ export class BabyVideoElement extends HTMLElement {
     while (true) {
       if (this.#readyState <= MediaReadyState.HAVE_CURRENT_DATA) {
         await waitForEvent(this, "canplay", signal);
-      } else if (!this.#hasDecodedFrameAtTime(timeInMicros)) {
-        await this.#waitForNextDecodedFrame(signal);
+      } else if (!this.#hasDecodedVideoFrameAtTime(timeInMicros)) {
+        await this.#waitForNextDecodedVideoFrame(signal);
+      } else if (!this.#hasDecodedAudioFrameAtTime(timeInMicros)) {
+        await this.#waitForNextDecodedAudioFrame(signal);
       } else {
         break;
       }
@@ -602,18 +605,34 @@ export class BabyVideoElement extends HTMLElement {
     queueTask(() => this.dispatchEvent(new Event("seeked")));
   }
 
-  #hasDecodedFrameAtTime(timeInMicros: number): boolean {
-    return this.#decodedVideoFrames.some(
-      (frame) =>
+  #hasDecodedVideoFrameAtTime(timeInMicros: number): boolean {
+    return this.#hasDecodedFrameAtTime(this.#decodedVideoFrames, timeInMicros);
+  }
+  #hasDecodedAudioFrameAtTime(timeInMicros: number): boolean {
+    return this.#hasDecodedFrameAtTime(this.#decodedAudioFrames, timeInMicros);
+  }
+
+  #hasDecodedFrameAtTime(
+    frames: ReadonlyArray<VideoFrame | AudioData>,
+    timeInMicros: number
+  ): boolean {
+    return frames.some(
+      (frame: VideoFrame | AudioData) =>
         frame.timestamp <= timeInMicros &&
         timeInMicros < frame.timestamp + frame.duration!
     );
   }
 
-  async #waitForNextDecodedFrame(signal: AbortSignal): Promise<void> {
-    this.#nextDecodedFramePromise = new Deferred<void>();
-    this.#nextDecodedFramePromise.follow(signal);
-    await this.#nextDecodedFramePromise.promise;
+  async #waitForNextDecodedVideoFrame(signal: AbortSignal): Promise<void> {
+    this.#nextDecodedVideoFramePromise = new Deferred<void>();
+    this.#nextDecodedVideoFramePromise.follow(signal);
+    await this.#nextDecodedVideoFramePromise.promise;
+  }
+
+  async #waitForNextDecodedAudioFrame(signal: AbortSignal): Promise<void> {
+    this.#nextDecodedAudioFramePromise = new Deferred<void>();
+    this.#nextDecodedAudioFramePromise.follow(signal);
+    await this.#nextDecodedAudioFramePromise.promise;
   }
 
   #decodeVideoFrames(): void {
@@ -711,9 +730,9 @@ export class BabyVideoElement extends HTMLElement {
     frame.close();
     frame = newFrame;
     this.#decodedVideoFrames.push(newFrame);
-    if (this.#nextDecodedFramePromise) {
-      this.#nextDecodedFramePromise.resolve();
-      this.#nextDecodedFramePromise = undefined;
+    if (this.#nextDecodedVideoFramePromise) {
+      this.#nextDecodedVideoFramePromise.resolve();
+      this.#nextDecodedVideoFramePromise = undefined;
     }
     // Schedule render immediately if this is the first decoded frame after a seek
     if (this.#lastRenderedFrame === undefined) {
@@ -889,6 +908,10 @@ export class BabyVideoElement extends HTMLElement {
       return;
     }
     this.#decodedAudioFrames.push(decodedFrame);
+    if (this.#nextDecodedAudioFramePromise) {
+      this.#nextDecodedAudioFramePromise.resolve();
+      this.#nextDecodedAudioFramePromise = undefined;
+    }
     // Decode more frames (if we now have more space in the queue)
     this.#decodeAudio();
   }
