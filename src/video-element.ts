@@ -57,12 +57,14 @@ export class BabyVideoElement extends HTMLElement {
   #currentTime: number = 0;
   #duration: number = NaN;
   #ended: boolean = false;
+  #muted: boolean = false;
   #paused: boolean = true;
   #playbackRate: number = 1;
   #played: TimeRanges = new TimeRanges([]);
   #readyState: MediaReadyState = MediaReadyState.HAVE_NOTHING;
   #seeking: boolean = false;
   #srcObject: BabyMediaSource | undefined;
+  #volume: number = 1;
 
   #pendingPlayPromises: Array<Deferred<void>> = [];
   #advanceLoop: number = 0;
@@ -171,6 +173,18 @@ export class BabyVideoElement extends HTMLElement {
     return this.#ended && this.#playbackRate >= 0;
   }
 
+  get muted(): boolean {
+    return this.#muted;
+  }
+
+  set muted(value: boolean) {
+    if (this.#muted !== value) {
+      this.#muted = value;
+      this.dispatchEvent(new Event("volumechange"));
+      this.#updateVolume();
+    }
+  }
+
   get paused(): boolean {
     return this.#paused;
   }
@@ -248,6 +262,18 @@ export class BabyVideoElement extends HTMLElement {
 
   get videoHeight(): number {
     return this.#canvas.height;
+  }
+
+  get volume(): number {
+    return this.#volume;
+  }
+
+  set volume(value: number) {
+    if (this.#volume !== value) {
+      this.#volume = value;
+      this.dispatchEvent(new Event("volumechange"));
+      this.#updateVolume();
+    }
   }
 
   load(): void {
@@ -850,6 +876,7 @@ export class BabyVideoElement extends HTMLElement {
 
     this.#volumeGainNode = new GainNode(this.#audioContext);
     this.#volumeGainNode.connect(this.#audioContext.destination);
+    this.#updateVolume();
 
     if (this.#isPotentiallyPlaying() && !this.#seeking) {
       void this.#audioContext.resume();
@@ -986,6 +1013,11 @@ export class BabyVideoElement extends HTMLElement {
     this.#scheduledAudioSourceNodes.length = 0;
     this.#lastScheduledAudioFrameEndTime = -1;
     this.#audioDecoder.reset();
+  }
+
+  #updateVolume(): void {
+    if (this.#volumeGainNode === undefined) return;
+    this.#volumeGainNode.gain.value = this.#muted ? 0 : this.#volume;
   }
 
   #isPotentiallyPlaying(): boolean {
