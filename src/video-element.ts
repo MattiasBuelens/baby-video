@@ -1051,15 +1051,12 @@ export class BabyVideoElement extends HTMLElement {
       arrayRemove(this.#scheduledAudioSourceNodes, entry);
     });
 
-    let offset = timestamp - currentTimeInMicros;
-    if (playbackRate < 0) {
-      offset = -offset;
-    }
+    const offset = (timestamp - currentTimeInMicros) / (1e6 * playbackRate);
     node.playbackRate.value = Math.abs(playbackRate);
     if (offset > 0) {
-      node.start(0, offset / (1e6 * playbackRate));
+      node.start(0, offset);
     } else {
-      node.start(-offset / (1e6 * playbackRate));
+      node.start(-offset);
     }
   }
 
