@@ -82,6 +82,8 @@ export abstract class TrackBuffer<T extends EncodedChunk = EncodedChunk> {
 
   abstract findFrameForTime(time: number): T | undefined;
 
+  abstract hasFrame(frame: T): boolean;
+
   abstract getDecodeDependenciesForFrame(frame: T): DecodeQueue;
 
   abstract getNextFrames(
@@ -128,6 +130,10 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
         frame.timestamp <= timeInMicros &&
         timeInMicros < frame.timestamp + frame.duration!
     );
+  }
+
+  hasFrame(frame: EncodedAudioChunk): boolean {
+    return this.#frames.includes(frame);
   }
 
   getDecodeDependenciesForFrame(frame: EncodedAudioChunk): AudioDecodeQueue {
@@ -252,6 +258,10 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
   reconfigure(newConfig: VideoDecoderConfig): void {
     super.reconfigure(newConfig);
     this.#currentGop = undefined;
+  }
+
+  hasFrame(frame: EncodedAudioChunk): boolean {
+    return this.#gops.some((gop) => gop.frames.includes(frame));
   }
 
   findFrameForTime(time: number): EncodedVideoChunk | undefined {

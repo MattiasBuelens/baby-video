@@ -646,6 +646,14 @@ export class BabyVideoElement extends HTMLElement {
     }
     const direction =
       this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
+    // Check if last decoded frame still exists, i.e. it was not overwritten
+    // or removed from the SourceBuffer
+    if (
+      this.#furthestDecodingVideoFrame !== undefined &&
+      !videoTrackBuffer.hasFrame(this.#furthestDecodingVideoFrame)
+    ) {
+      this.#furthestDecodingVideoFrame = undefined;
+    }
     // Decode frames for current time
     if (this.#furthestDecodingVideoFrame === undefined) {
       const frameAtTime = videoTrackBuffer.findFrameForTime(this.currentTime);
@@ -816,6 +824,14 @@ export class BabyVideoElement extends HTMLElement {
     }
     const direction =
       this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
+    // Check if last decoded frame still exists, i.e. it was not overwritten
+    // or removed from the SourceBuffer
+    if (
+      this.#furthestDecodedAudioFrame !== undefined &&
+      !audioTrackBuffer.hasFrame(this.#furthestDecodedAudioFrame)
+    ) {
+      this.#furthestDecodedAudioFrame = undefined;
+    }
     // Decode audio for current time
     if (this.#furthestDecodedAudioFrame === undefined) {
       const frameAtTime = audioTrackBuffer.findFrameForTime(this.currentTime);
