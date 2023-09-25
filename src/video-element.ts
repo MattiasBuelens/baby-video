@@ -905,7 +905,7 @@ export class BabyVideoElement extends HTMLElement {
       const frame = this.#decodedAudioFrames[frameIndex];
       const previousFrame = frames[frames.length - 1];
       if (
-        frame.timestamp! === previousFrame.timestamp + previousFrame.duration &&
+        isConsecutiveAudioFrame(previousFrame, frame) &&
         frame.format === firstFrame.format &&
         frame.numberOfChannels === firstFrame.numberOfChannels &&
         frame.sampleRate === firstFrame.sampleRate
@@ -1172,4 +1172,13 @@ function overlapsWithFrame(
     left.timestamp < right.timestamp + right.duration! &&
     right.timestamp < left.timestamp + left.duration!
   );
+}
+
+function isConsecutiveAudioFrame(
+  previous: AudioData,
+  next: AudioData
+): boolean {
+  const diff = next.timestamp - (previous.timestamp + previous.duration);
+  // Due to rounding, there can be a 1 microsecond gap between consecutive audio frames.
+  return diff === 0 || diff === 1;
 }
