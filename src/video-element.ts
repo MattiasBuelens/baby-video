@@ -605,8 +605,8 @@ export class BabyVideoElement extends HTMLElement {
   #hasDecodedFrameAtTime(timeInMicros: number): boolean {
     return this.#decodedVideoFrames.some(
       (frame) =>
-        frame.timestamp! <= timeInMicros &&
-        timeInMicros < frame.timestamp! + frame.duration!
+        frame.timestamp <= timeInMicros &&
+        timeInMicros < frame.timestamp + frame.duration!
     );
   }
 
@@ -747,8 +747,8 @@ export class BabyVideoElement extends HTMLElement {
     // Render the frame at current time.
     let currentFrameIndex = this.#decodedVideoFrames.findIndex((frame) => {
       return (
-        frame.timestamp! <= currentTimeInMicros &&
-        currentTimeInMicros < frame.timestamp! + frame.duration!
+        frame.timestamp <= currentTimeInMicros &&
+        currentTimeInMicros < frame.timestamp + frame.duration!
       );
     });
     if (currentFrameIndex < 0) {
@@ -757,7 +757,7 @@ export class BabyVideoElement extends HTMLElement {
       return;
     }
     const frame = this.#decodedVideoFrames[currentFrameIndex];
-    if (this.#lastRenderedFrame !== frame.timestamp!) {
+    if (this.#lastRenderedFrame !== frame.timestamp) {
       this.#updateSize(frame.displayWidth, frame.displayHeight);
       this.#canvasContext.drawImage(
         frame,
@@ -767,7 +767,7 @@ export class BabyVideoElement extends HTMLElement {
         frame.displayHeight
       );
       arrayRemoveAt(this.#decodedVideoFrames, currentFrameIndex);
-      this.#lastRenderedFrame = frame.timestamp!;
+      this.#lastRenderedFrame = frame.timestamp;
       frame.close();
     }
     // Decode more frames (if we now have more space in the queue)
@@ -944,8 +944,8 @@ export class BabyVideoElement extends HTMLElement {
       // Render the frame at current time.
       nextFrameIndex = this.#decodedAudioFrames.findIndex((frame) => {
         return (
-          frame.timestamp! <= currentTimeInMicros &&
-          currentTimeInMicros < frame.timestamp! + frame.duration!
+          frame.timestamp <= currentTimeInMicros &&
+          currentTimeInMicros < frame.timestamp + frame.duration
         );
       });
     }
@@ -1279,9 +1279,9 @@ function isFrameBeyondTime(
   timeInMicros: number
 ): boolean {
   if (direction == Direction.FORWARD) {
-    return frame.timestamp! + frame.duration! <= timeInMicros;
+    return frame.timestamp + frame.duration! <= timeInMicros;
   } else {
-    return frame.timestamp! >= timeInMicros;
+    return frame.timestamp >= timeInMicros;
   }
 }
 

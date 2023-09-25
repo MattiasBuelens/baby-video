@@ -170,7 +170,7 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
   }
 
   getRandomAccessPointAtOrAfter(timeInMicros: number): number | undefined {
-    return this.#frames.find((frame) => frame.timestamp! >= timeInMicros)
+    return this.#frames.find((frame) => frame.timestamp >= timeInMicros)
       ?.timestamp;
   }
 
@@ -191,8 +191,8 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
   #updateTrackBufferRanges(): void {
     this.trackBufferRanges = new TimeRanges(
       this.#frames.map((frame) => [
-        frame.timestamp! / 1e6,
-        (frame.timestamp! + frame.duration!) / 1e6
+        frame.timestamp / 1e6,
+        (frame.timestamp + frame.duration!) / 1e6
       ])
     ).mergeOverlaps(BUFFERED_TOLERANCE);
   }
@@ -359,7 +359,7 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
       } else {
         // Remove some frames.
         const lastFrame = gop.frames[removeFrom - 1];
-        gop.end = lastFrame.timestamp! + lastFrame.duration!;
+        gop.end = lastFrame.timestamp + lastFrame.duration!;
         gop.frames.splice(removeFrom);
         didRemove = true;
       }

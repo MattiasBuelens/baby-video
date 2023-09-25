@@ -609,12 +609,12 @@ export class BabySourceBuffer extends EventTarget {
           if (trackBuffer.type === "video") {
             // 1. Let remove window timestamp equal the overlapped frame presentation timestamp
             //    plus 1 microsecond.
-            const removeWindowTimestamp = overlappedFrame.timestamp! + 1;
+            const removeWindowTimestamp = overlappedFrame.timestamp + 1;
             // 2. If the presentation timestamp is less than the remove window timestamp,
             //   then remove overlapped frame from track buffer.
             if (1e6 * pts < removeWindowTimestamp) {
               trackBuffer.removeSamples(
-                overlappedFrame.timestamp!,
+                overlappedFrame.timestamp,
                 removeWindowTimestamp
               );
             }
