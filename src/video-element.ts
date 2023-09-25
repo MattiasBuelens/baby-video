@@ -700,7 +700,7 @@ export class BabyVideoElement extends HTMLElement {
 
   async #onVideoFrame(frame: VideoFrame) {
     const decodingFrameIndex = this.#decodingVideoFrames.findIndex((x) =>
-      overlapsWithFrame(x, frame)
+      isFrameTimestampEqual(x, frame)
     );
     if (decodingFrameIndex < 0) {
       // Drop frames that are no longer in the decode queue.
@@ -882,7 +882,7 @@ export class BabyVideoElement extends HTMLElement {
 
   #onAudioData(frame: AudioData): void {
     const decodingFrameIndex = this.#decodingAudioFrames.findIndex((x) =>
-      overlapsWithFrame(x, frame)
+      isFrameTimestampEqual(x, frame)
     );
     if (decodingFrameIndex < 0) {
       // Drop frames that are no longer in the decode queue.
@@ -1311,14 +1311,16 @@ function isFrameBeyondTime(
   }
 }
 
-function overlapsWithFrame(
-  left: EncodedChunk | AudioData | VideoFrame,
-  right: EncodedChunk | AudioData | VideoFrame
+function getFrameTolerance(frame: EncodedChunk | AudioData | VideoFrame) {
+  return Math.ceil(frame.duration! / 16);
+}
+
+function isFrameTimestampEqual(
+  left: EncodedChunk,
+  right: AudioData | VideoFrame
 ): boolean {
-  return (
-    left.timestamp < right.timestamp + right.duration! &&
-    right.timestamp < left.timestamp + left.duration!
-  );
+  // Due to rounding, there can be a small gap between encoded and decoded frames.
+  return Math.abs(left.timestamp - right.timestamp) <= getFrameTolerance(left);
 }
 
 function isConsecutiveAudioFrame(
@@ -1332,8 +1334,8 @@ function isConsecutiveAudioFrame(
   } else {
     diff = next.timestamp - (previous.timestamp + previous.duration);
   }
-  // Due to rounding, there can be a 1 microsecond gap between consecutive audio frames.
-  return diff === 0 || diff === 1;
+  // Due to rounding, there can be a small gap between consecutive audio frames.
+  return Math.abs(diff) <= getFrameTolerance(previous);
 }
 
 function cloneEncodedAudioChunk(
