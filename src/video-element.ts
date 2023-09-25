@@ -89,12 +89,15 @@ export class BabyVideoElement extends HTMLElement {
 
   readonly #audioDecoder: AudioDecoder;
   #lastAudioDecoderConfig: AudioDecoderConfig | undefined = undefined;
+  #audioDecoderTimestamp: number = 0;
   #furthestDecodedAudioFrame: EncodedAudioChunk | undefined = undefined;
   #decodingAudioFrames: EncodedAudioChunk[] = [];
+  #originalDecodingAudioFrames: WeakMap<EncodedAudioChunk, EncodedAudioChunk> =
+    new WeakMap();
   #decodedAudioFrames: AudioData[] = [];
 
   #audioContext: AudioContext | undefined;
-  #lastScheduledAudioFrameEndTime: number = -1;
+  #lastScheduledAudioFrameTime: number = -1;
   #scheduledAudioSourceNodes: Array<{
     node: AudioBufferSourceNode;
     timestamp: number;
@@ -657,22 +660,22 @@ export class BabyVideoElement extends HTMLElement {
     decodeQueue: VideoDecodeQueue,
     direction: Direction
   ): void {
+    const { frames, codecConfig } = decodeQueue;
     if (
       this.#videoDecoder.state === "unconfigured" ||
-      this.#lastVideoDecoderConfig !== decodeQueue.codecConfig
+      this.#lastVideoDecoderConfig !== codecConfig
     ) {
-      this.#videoDecoder.configure(decodeQueue.codecConfig);
-      this.#lastVideoDecoderConfig = decodeQueue.codecConfig;
+      this.#videoDecoder.configure(codecConfig);
+      this.#lastVideoDecoderConfig = codecConfig;
     }
-    for (const frame of decodeQueue.frames) {
+    for (const frame of frames) {
       this.#videoDecoder.decode(frame);
       this.#decodingVideoFrames.push(frame);
     }
     if (direction == Direction.FORWARD) {
-      this.#furthestDecodingVideoFrame =
-        decodeQueue.frames[decodeQueue.frames.length - 1];
+      this.#furthestDecodingVideoFrame = frames[frames.length - 1];
     } else {
-      this.#furthestDecodingVideoFrame = decodeQueue.frames[0];
+      this.#furthestDecodingVideoFrame = frames[0];
     }
   }
 
@@ -827,22 +830,34 @@ export class BabyVideoElement extends HTMLElement {
     decodeQueue: AudioDecodeQueue,
     direction: Direction
   ): void {
+    const { frames, codecConfig } = decodeQueue;
     if (
       this.#audioDecoder.state === "unconfigured" ||
-      this.#lastAudioDecoderConfig !== decodeQueue.codecConfig
+      this.#lastAudioDecoderConfig !== codecConfig
     ) {
-      this.#audioDecoder.configure(decodeQueue.codecConfig);
-      this.#lastAudioDecoderConfig = decodeQueue.codecConfig;
+      this.#audioDecoder.configure(codecConfig);
+      this.#lastAudioDecoderConfig = codecConfig;
     }
-    for (const frame of decodeQueue.frames) {
-      this.#audioDecoder.decode(frame);
-      this.#decodingAudioFrames.push(frame);
+    for (const frame of frames) {
+      // AudioDecoder does not always preserve EncodedAudioChunk.timestamp
+      // to the decoded AudioData.timestamp, instead it adds up the sample durations
+      // since the last decoded chunk. This breaks reverse playback, since we
+      // intentionally feed the decoder chunks in the "wrong" order.
+      // Copy to a new chunk with the same *increasing* timestamp,
+      // and fix the timestamp later on.
+      const newFrame = cloneEncodedAudioChunk(
+        frame,
+        this.#audioDecoderTimestamp
+      );
+      this.#originalDecodingAudioFrames.set(newFrame, frame);
+      this.#audioDecoder.decode(newFrame);
+      this.#decodingAudioFrames.push(newFrame);
+      this.#audioDecoderTimestamp += frame.duration!;
     }
     if (direction == Direction.FORWARD) {
-      this.#furthestDecodedAudioFrame =
-        decodeQueue.frames[decodeQueue.frames.length - 1];
+      this.#furthestDecodedAudioFrame = frames[frames.length - 1];
     } else {
-      this.#furthestDecodedAudioFrame = decodeQueue.frames[0];
+      this.#furthestDecodedAudioFrame = frames[0];
     }
   }
 
@@ -857,17 +872,23 @@ export class BabyVideoElement extends HTMLElement {
     }
     const decodingFrame = this.#decodingAudioFrames[decodingFrameIndex];
     arrayRemoveAt(this.#decodingAudioFrames, decodingFrameIndex);
+    // Restore original timestamp
+    const decodedFrame = cloneAudioData(
+      frame,
+      this.#originalDecodingAudioFrames.get(decodingFrame)!.timestamp
+    );
+    frame.close();
     // Drop frames that are beyond current time, since we're too late to render them.
     const currentTimeInMicros = 1e6 * this.#currentTime;
     const direction =
       this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
-    if (isFrameBeyondTime(decodingFrame, direction, currentTimeInMicros)) {
-      frame.close();
+    if (isFrameBeyondTime(decodedFrame, direction, currentTimeInMicros)) {
+      decodedFrame.close();
       // Decode more frames (if we now have more space in the queue)
       this.#decodeAudio();
       return;
     }
-    this.#decodedAudioFrames.push(frame);
+    this.#decodedAudioFrames.push(decodedFrame);
     // Decode more frames (if we now have more space in the queue)
     this.#decodeAudio();
   }
@@ -906,10 +927,17 @@ export class BabyVideoElement extends HTMLElement {
     // Don't render audio while playback is stopped.
     if (this.#playbackRate === 0) return;
     let nextFrameIndex: number = -1;
-    if (this.#lastScheduledAudioFrameEndTime >= 0) {
+    if (this.#lastScheduledAudioFrameTime >= 0) {
       // Render the next frame.
       nextFrameIndex = this.#decodedAudioFrames.findIndex((frame) => {
-        return frame.timestamp! === this.#lastScheduledAudioFrameEndTime;
+        if (direction === Direction.BACKWARD) {
+          return (
+            frame.timestamp + frame.duration ===
+            this.#lastScheduledAudioFrameTime
+          );
+        } else {
+          return frame.timestamp === this.#lastScheduledAudioFrameTime;
+        }
       });
     }
     if (nextFrameIndex < 0) {
@@ -938,7 +966,7 @@ export class BabyVideoElement extends HTMLElement {
       const frame = this.#decodedAudioFrames[frameIndex];
       const previousFrame = frames[frames.length - 1];
       if (
-        isConsecutiveAudioFrame(previousFrame, frame) &&
+        isConsecutiveAudioFrame(previousFrame, frame, direction) &&
         frame.format === firstFrame.format &&
         frame.numberOfChannels === firstFrame.numberOfChannels &&
         frame.sampleRate === firstFrame.sampleRate
@@ -950,15 +978,33 @@ export class BabyVideoElement extends HTMLElement {
         break;
       }
     }
+    if (direction === Direction.BACKWARD) {
+      frames.reverse();
+    }
     this.#audioContext ??= this.#initializeAudio(firstFrame.sampleRate);
-    this.#renderAudioFrame(frames, currentTimeInMicros);
+    this.#renderAudioFrame(frames, currentTimeInMicros, direction);
     // Decode more frames (if we now have more space in the queue)
     this.#decodeAudio();
   }
 
-  #renderAudioFrame(frames: AudioData[], currentTimeInMicros: number) {
+  #renderAudioFrame(
+    frames: AudioData[],
+    currentTimeInMicros: number,
+    direction: Direction
+  ) {
+    const firstFrame = frames[0];
+    const lastFrame = frames[frames.length - 1];
+    let firstTimestamp: number;
+    let lastTimestamp: number;
+    if (direction === Direction.BACKWARD) {
+      firstTimestamp = lastFrame.timestamp + lastFrame.duration;
+      lastTimestamp = firstFrame.timestamp;
+    } else {
+      firstTimestamp = firstFrame.timestamp;
+      lastTimestamp = lastFrame.timestamp + lastFrame.duration;
+    }
     // Create an AudioBuffer containing all frame data
-    const { numberOfChannels, sampleRate, timestamp } = frames[0];
+    const { numberOfChannels, sampleRate } = frames[0];
     const audioBuffer = new AudioBuffer({
       numberOfChannels,
       length: frames.reduce(
@@ -980,17 +1026,19 @@ export class BabyVideoElement extends HTMLElement {
         frame.copyTo(destination.subarray(offset, offset + size), options);
         offset += size;
       }
+      if (direction === Direction.BACKWARD) {
+        // For reverse playback, reverse the order of the individual samples.
+        destination.reverse();
+      }
     }
     // Schedule an AudioBufferSourceNode to play the AudioBuffer
     this.#scheduleAudioBuffer(
       audioBuffer,
-      timestamp,
+      firstTimestamp,
       currentTimeInMicros,
       this.#playbackRate
     );
-    const lastFrame = frames[frames.length - 1];
-    this.#lastScheduledAudioFrameEndTime =
-      lastFrame.timestamp + lastFrame.duration;
+    this.#lastScheduledAudioFrameTime = lastTimestamp;
     // Close the frames, so the audio decoder can reclaim them.
     for (let i = frames.length - 1; i >= 0; i--) {
       const frame = frames[i];
@@ -1007,11 +1055,12 @@ export class BabyVideoElement extends HTMLElement {
       audioSourceNode.node.stop();
     }
     this.#lastAudioDecoderConfig = undefined;
+    this.#audioDecoderTimestamp = 0;
     this.#furthestDecodedAudioFrame = undefined;
     this.#decodingAudioFrames.length = 0;
     this.#decodedAudioFrames.length = 0;
     this.#scheduledAudioSourceNodes.length = 0;
-    this.#lastScheduledAudioFrameEndTime = -1;
+    this.#lastScheduledAudioFrameTime = -1;
     this.#audioDecoder.reset();
   }
 
@@ -1248,9 +1297,67 @@ function overlapsWithFrame(
 
 function isConsecutiveAudioFrame(
   previous: AudioData,
-  next: AudioData
+  next: AudioData,
+  direction: Direction
 ): boolean {
-  const diff = next.timestamp - (previous.timestamp + previous.duration);
+  let diff: number;
+  if (direction === Direction.BACKWARD) {
+    diff = previous.timestamp - (next.timestamp + next.duration);
+  } else {
+    diff = next.timestamp - (previous.timestamp + previous.duration);
+  }
   // Due to rounding, there can be a 1 microsecond gap between consecutive audio frames.
   return diff === 0 || diff === 1;
+}
+
+function cloneEncodedAudioChunk(
+  original: EncodedAudioChunk,
+  timestamp: number
+): EncodedAudioChunk {
+  const data = new ArrayBuffer(original.byteLength);
+  original.copyTo(data);
+  return new EncodedAudioChunk({
+    data,
+    timestamp,
+    duration: original.duration ?? undefined,
+    type: original.type
+  });
+}
+
+function cloneAudioData(original: AudioData, timestamp: number): AudioData {
+  const format = "f32-planar";
+  let totalSize = 0;
+  for (
+    let channelIndex = 0;
+    channelIndex < original.numberOfChannels;
+    channelIndex++
+  ) {
+    totalSize +=
+      original.allocationSize({ format, planeIndex: channelIndex }) /
+      Float32Array.BYTES_PER_ELEMENT;
+  }
+  const buffer = new Float32Array(totalSize);
+  let offset = 0;
+  for (
+    let channelIndex = 0;
+    channelIndex < original.numberOfChannels;
+    channelIndex++
+  ) {
+    const options: AudioDataCopyToOptions = {
+      format,
+      planeIndex: channelIndex
+    };
+    const channelSize =
+      original.allocationSize(options) / Float32Array.BYTES_PER_ELEMENT;
+    original.copyTo(buffer.subarray(offset, offset + totalSize), options);
+    offset += channelSize;
+  }
+  return new AudioData({
+    data: buffer,
+    format,
+    numberOfChannels: original.numberOfChannels,
+    numberOfFrames: original.numberOfFrames,
+    sampleRate: original.sampleRate,
+    timestamp: timestamp
+  });
 }

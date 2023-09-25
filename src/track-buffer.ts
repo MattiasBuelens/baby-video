@@ -140,17 +140,33 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
   getNextFrames(
     frame: EncodedAudioChunk,
     maxAmount: number,
-    _direction: Direction
+    direction: Direction
   ): AudioDecodeQueue | undefined {
     const frameIndex = this.#frames.indexOf(frame);
-    if (frameIndex < 0 || frameIndex === this.#frames.length - 1) {
+    if (frameIndex < 0) {
       return undefined;
     }
-    const nextIndex = frameIndex + 1;
-    return {
-      frames: this.#frames.slice(nextIndex, nextIndex + maxAmount),
-      codecConfig: this.codecConfig
-    };
+    if (direction === Direction.FORWARD) {
+      const nextIndex = frameIndex + 1;
+      if (nextIndex >= this.#frames.length) {
+        return undefined;
+      }
+      return {
+        frames: this.#frames.slice(nextIndex, nextIndex + maxAmount),
+        codecConfig: this.codecConfig
+      };
+    } else {
+      const nextIndex = frameIndex - 1;
+      if (nextIndex < 0) {
+        return undefined;
+      }
+      return {
+        frames: this.#frames
+          .slice(Math.max(0, nextIndex - maxAmount), nextIndex)
+          .reverse(),
+        codecConfig: this.codecConfig
+      };
+    }
   }
 
   getRandomAccessPointAtOrAfter(timeInMicros: number): number | undefined {
