@@ -1226,6 +1226,9 @@ export class BabyVideoElement extends HTMLElement {
       if (!this.#paused) {
         this.#notifyAboutPlaying();
       }
+      // Decode more frames
+      this.#decodeVideoFrames();
+      this.#decodeAudio();
     }
     // If the new ready state is HAVE_ENOUGH_DATA
     if (newReadyState === MediaReadyState.HAVE_ENOUGH_DATA) {
