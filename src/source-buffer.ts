@@ -21,6 +21,7 @@ import {
   durationChange,
   endOfStream,
   getMediaElement,
+  hasSomeBuffer,
   openIfEnded
 } from "./media-source";
 import {
@@ -514,6 +515,8 @@ export class BabySourceBuffer extends EventTarget {
     const mediaElement = getMediaElement(this.#parent)!;
     const buffered = mediaElement.buffered;
     const currentTime = mediaElement.currentTime;
+    const duration = this.#parent.duration;
+    const playbackRate = mediaElement.playbackRate;
     if (
       mediaElement.readyState === MediaReadyState.HAVE_METADATA &&
       buffered.contains(currentTime)
@@ -526,7 +529,7 @@ export class BabySourceBuffer extends EventTarget {
     //    attribute to HAVE_FUTURE_DATA.
     if (
       mediaElement.readyState === MediaReadyState.HAVE_CURRENT_DATA &&
-      buffered.containsRange(currentTime, currentTime + 0.1)
+      hasSomeBuffer(buffered, currentTime, duration, playbackRate)
     ) {
       updateReadyState(mediaElement, MediaReadyState.HAVE_FUTURE_DATA);
     }
