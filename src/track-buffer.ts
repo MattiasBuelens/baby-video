@@ -167,9 +167,10 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
         return undefined;
       }
       return {
-        frames: this.#frames
-          .slice(Math.max(0, nextIndex - maxAmount), nextIndex)
-          .reverse(),
+        frames: this.#frames.slice(
+          Math.max(0, nextIndex - maxAmount),
+          nextIndex
+        ),
         codecConfig: this.codecConfig
       };
     }

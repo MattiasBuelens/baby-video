@@ -608,6 +608,7 @@ export class BabyVideoElement extends HTMLElement {
   #hasDecodedVideoFrameAtTime(timeInMicros: number): boolean {
     return this.#hasDecodedFrameAtTime(this.#decodedVideoFrames, timeInMicros);
   }
+
   #hasDecodedAudioFrameAtTime(timeInMicros: number): boolean {
     return this.#hasDecodedFrameAtTime(this.#decodedAudioFrames, timeInMicros);
   }
@@ -699,6 +700,8 @@ export class BabyVideoElement extends HTMLElement {
       this.#videoDecoder.decode(frame);
       this.#decodingVideoFrames.push(frame);
     }
+    // The "furthest decoded frame" depends on the rendering order,
+    // since we must decode the frames in their original order.
     if (direction == Direction.FORWARD) {
       this.#furthestDecodingVideoFrame = frames[frames.length - 1];
     } else {
@@ -873,6 +876,11 @@ export class BabyVideoElement extends HTMLElement {
       this.#audioDecoder.configure(codecConfig);
       this.#lastAudioDecoderConfig = codecConfig;
     }
+    if (direction === Direction.BACKWARD) {
+      // Audio has no dependencies between frames, so we can decode them
+      // in the same order as they will be rendered.
+      frames.reverse();
+    }
     for (const frame of frames) {
       // AudioDecoder does not always preserve EncodedAudioChunk.timestamp
       // to the decoded AudioData.timestamp, instead it adds up the sample durations
@@ -889,11 +897,9 @@ export class BabyVideoElement extends HTMLElement {
       this.#decodingAudioFrames.push(newFrame);
       this.#audioDecoderTimestamp += frame.duration!;
     }
-    if (direction == Direction.FORWARD) {
-      this.#furthestDecodedAudioFrame = frames[frames.length - 1];
-    } else {
-      this.#furthestDecodedAudioFrame = frames[0];
-    }
+    // The "furthest audio frame" is always the last one,
+    // since we decode them in rendering order (see above).
+    this.#furthestDecodedAudioFrame = frames[frames.length - 1];
   }
 
   #onAudioData(frame: AudioData): void {
