@@ -439,11 +439,12 @@ export class BabyVideoElement extends HTMLElement {
       const newTime =
         this.#currentTime + this.#playbackRate * Math.max(0, elapsedTime);
       // Do not advance outside the current buffered range.
-      const currentRange = this.buffered.find(this.#currentTime)!;
-      return Math.min(Math.max(currentRange[0], newTime), currentRange[1]);
-    } else {
-      return this.#currentTime;
+      const currentRange = this.buffered.find(this.#currentTime);
+      if (currentRange !== undefined) {
+        return Math.min(Math.max(currentRange[0], newTime), currentRange[1]);
+      }
     }
+    return this.#currentTime;
   }
 
   #updateCurrentTime(currentTime: number) {
