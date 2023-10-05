@@ -1,6 +1,6 @@
 import { TimeRanges } from "./time-ranges";
 import { Sample } from "mp4box";
-import { Direction, insertSorted } from "./util";
+import { arrayRemoveAt, Direction, insertSorted } from "./util";
 
 const BUFFERED_TOLERANCE: number = 1 / 60;
 
@@ -82,6 +82,8 @@ export abstract class TrackBuffer<T extends EncodedChunk = EncodedChunk> {
 
   abstract findFrameForTime(time: number): T | undefined;
 
+  abstract hasFrame(frame: T): boolean;
+
   abstract getDecodeDependenciesForFrame(frame: T): DecodeQueue;
 
   abstract getNextFrames(
@@ -130,6 +132,10 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
     );
   }
 
+  hasFrame(frame: EncodedAudioChunk): boolean {
+    return this.#frames.includes(frame);
+  }
+
   getDecodeDependenciesForFrame(frame: EncodedAudioChunk): AudioDecodeQueue {
     return {
       frames: [frame],
@@ -140,21 +146,38 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
   getNextFrames(
     frame: EncodedAudioChunk,
     maxAmount: number,
-    _direction: Direction
-  ): DecodeQueue | undefined {
+    direction: Direction
+  ): AudioDecodeQueue | undefined {
     const frameIndex = this.#frames.indexOf(frame);
-    if (frameIndex < 0 || frameIndex === this.#frames.length - 1) {
+    if (frameIndex < 0) {
       return undefined;
     }
-    const nextIndex = frameIndex + 1;
-    return {
-      frames: this.#frames.slice(nextIndex, nextIndex + maxAmount),
-      codecConfig: this.codecConfig
-    };
+    if (direction === Direction.FORWARD) {
+      const nextIndex = frameIndex + 1;
+      if (nextIndex >= this.#frames.length) {
+        return undefined;
+      }
+      return {
+        frames: this.#frames.slice(nextIndex, nextIndex + maxAmount),
+        codecConfig: this.codecConfig
+      };
+    } else {
+      const nextIndex = frameIndex - 1;
+      if (nextIndex < 0) {
+        return undefined;
+      }
+      return {
+        frames: this.#frames.slice(
+          Math.max(0, nextIndex - maxAmount),
+          nextIndex
+        ),
+        codecConfig: this.codecConfig
+      };
+    }
   }
 
   getRandomAccessPointAtOrAfter(timeInMicros: number): number | undefined {
-    return this.#frames.find((frame) => frame.timestamp! >= timeInMicros)
+    return this.#frames.find((frame) => frame.timestamp >= timeInMicros)
       ?.timestamp;
   }
 
@@ -163,7 +186,7 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
     for (let i = this.#frames.length - 1; i >= 0; i--) {
       const frame = this.#frames[i];
       if (frame.timestamp >= startInMicros && frame.timestamp < endInMicros) {
-        this.#frames.splice(i, 1);
+        arrayRemoveAt(this.#frames, i);
         didRemove = true;
       }
     }
@@ -175,8 +198,8 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
   #updateTrackBufferRanges(): void {
     this.trackBufferRanges = new TimeRanges(
       this.#frames.map((frame) => [
-        frame.timestamp! / 1e6,
-        (frame.timestamp! + frame.duration!) / 1e6
+        frame.timestamp / 1e6,
+        (frame.timestamp + frame.duration!) / 1e6
       ])
     ).mergeOverlaps(BUFFERED_TOLERANCE);
   }
@@ -238,6 +261,10 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
     this.#currentGop = undefined;
   }
 
+  hasFrame(frame: EncodedAudioChunk): boolean {
+    return this.#gops.some((gop) => gop.frames.includes(frame));
+  }
+
   findFrameForTime(time: number): EncodedVideoChunk | undefined {
     const timeInMicros = time * 1e6;
     const containingGop = this.#gops.find((gop) => {
@@ -271,7 +298,7 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
     frame: EncodedVideoChunk,
     maxAmount: number,
     direction: Direction
-  ): DecodeQueue | undefined {
+  ): VideoDecodeQueue | undefined {
     let gopIndex = this.#gops.findIndex((gop) => {
       return gop.frames.includes(frame);
     })!;
@@ -338,12 +365,12 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
         // Keep entire GOP.
       } else if (removeFrom === 0) {
         // Remove entire GOP.
-        this.#gops.splice(i, 1);
+        arrayRemoveAt(this.#gops, i);
         didRemove = true;
       } else {
         // Remove some frames.
         const lastFrame = gop.frames[removeFrom - 1];
-        gop.end = lastFrame.timestamp! + lastFrame.duration!;
+        gop.end = lastFrame.timestamp + lastFrame.duration!;
         gop.frames.splice(removeFrom);
         didRemove = true;
       }

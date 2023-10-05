@@ -4,12 +4,24 @@ import {
   BabyMediaSource,
   checkBuffer,
   detachFromMediaElement,
+  getActiveAudioTrackBuffer,
   getActiveVideoTrackBuffer,
   getBuffered
 } from "./media-source";
-import { Deferred, Direction, queueTask, waitForEvent } from "./util";
+import {
+  arrayRemove,
+  arrayRemoveAt,
+  Deferred,
+  Direction,
+  queueTask,
+  waitForEvent
+} from "./util";
 import { TimeRange, TimeRanges } from "./time-ranges";
-import { VideoDecodeQueue } from "./track-buffer";
+import {
+  AudioDecodeQueue,
+  EncodedChunk,
+  VideoDecodeQueue
+} from "./track-buffer";
 
 const template = document.createElement("template");
 template.innerHTML = `<style>${stylesheet}</style>`;
@@ -45,16 +57,19 @@ export class BabyVideoElement extends HTMLElement {
   #currentTime: number = 0;
   #duration: number = NaN;
   #ended: boolean = false;
+  #muted: boolean = false;
   #paused: boolean = true;
   #playbackRate: number = 1;
   #played: TimeRanges = new TimeRanges([]);
   #readyState: MediaReadyState = MediaReadyState.HAVE_NOTHING;
   #seeking: boolean = false;
   #srcObject: BabyMediaSource | undefined;
+  #volume: number = 1;
 
   #pendingPlayPromises: Array<Deferred<void>> = [];
   #advanceLoop: number = 0;
   #lastAdvanceTime: number = 0;
+  #lastAudioTimestamp: number = 0;
   #lastPlayedTime: number = NaN;
   #lastTimeUpdate: number = 0;
   #lastProgress: number = 0;
@@ -68,9 +83,27 @@ export class BabyVideoElement extends HTMLElement {
   #furthestDecodingVideoFrame: EncodedVideoChunk | undefined = undefined;
   #decodingVideoFrames: EncodedVideoChunk[] = [];
   #decodedVideoFrames: VideoFrame[] = [];
-  #nextDecodedFramePromise: Deferred<void> | undefined = undefined;
+  #nextDecodedVideoFramePromise: Deferred<void> | undefined = undefined;
   #lastRenderedFrame: number | undefined = undefined;
   #nextRenderFrame: number = 0;
+
+  readonly #audioDecoder: AudioDecoder;
+  #lastAudioDecoderConfig: AudioDecoderConfig | undefined = undefined;
+  #audioDecoderTimestamp: number = 0;
+  #furthestDecodedAudioFrame: EncodedAudioChunk | undefined = undefined;
+  #decodingAudioFrames: EncodedAudioChunk[] = [];
+  #nextDecodedAudioFramePromise: Deferred<void> | undefined = undefined;
+  #originalDecodingAudioFrames: WeakMap<EncodedAudioChunk, EncodedAudioChunk> =
+    new WeakMap();
+  #decodedAudioFrames: AudioData[] = [];
+
+  #audioContext: AudioContext | undefined;
+  #lastScheduledAudioFrameTime: number = -1;
+  #scheduledAudioSourceNodes: Array<{
+    node: AudioBufferSourceNode;
+    timestamp: number;
+  }> = [];
+  #volumeGainNode: GainNode | undefined;
 
   constructor() {
     super();
@@ -93,6 +126,11 @@ export class BabyVideoElement extends HTMLElement {
     }
     this.#videoDecoder = new VideoDecoder({
       output: (frame) => this.#onVideoFrame(frame),
+      error: (error) => console.error("WTF", error)
+    });
+
+    this.#audioDecoder = new AudioDecoder({
+      output: (data) => this.#onAudioData(data),
       error: (error) => console.error("WTF", error)
     });
   }
@@ -142,6 +180,18 @@ export class BabyVideoElement extends HTMLElement {
     return this.#ended && this.#playbackRate >= 0;
   }
 
+  get muted(): boolean {
+    return this.#muted;
+  }
+
+  set muted(value: boolean) {
+    if (this.#muted !== value) {
+      this.#muted = value;
+      this.dispatchEvent(new Event("volumechange"));
+      this.#updateVolume();
+    }
+  }
+
   get paused(): boolean {
     return this.#paused;
   }
@@ -157,11 +207,13 @@ export class BabyVideoElement extends HTMLElement {
     const currentTime = this.#getCurrentPlaybackPosition(performance.now());
     if (Math.sign(value) !== Math.sign(this.#playbackRate)) {
       this.#resetVideoDecoder();
+      this.#resetAudioDecoder();
     }
     this.#playbackRate = value;
     this.#updateCurrentTime(currentTime);
     this.#updatePlaying();
     this.#updatePlayed();
+    this.#updateAudioPlaybackRate();
     this.dispatchEvent(new Event("ratechange"));
   }
 
@@ -200,6 +252,7 @@ export class BabyVideoElement extends HTMLElement {
     this.#seeking = false;
     this.#seekAbortController.abort();
     this.#lastAdvanceTime = 0;
+    this.#lastAudioTimestamp = 0;
     this.#lastProgress = 0;
     this.#lastPlayedTime = NaN;
     clearTimeout(this.#nextProgressTimer);
@@ -217,6 +270,18 @@ export class BabyVideoElement extends HTMLElement {
 
   get videoHeight(): number {
     return this.#canvas.height;
+  }
+
+  get volume(): number {
+    return this.#volume;
+  }
+
+  set volume(value: number) {
+    if (this.#volume !== value) {
+      this.#volume = value;
+      this.dispatchEvent(new Event("volumechange"));
+      this.#updateVolume();
+    }
   }
 
   load(): void {
@@ -341,13 +406,16 @@ export class BabyVideoElement extends HTMLElement {
 
   #updatePlaying(): void {
     if (this.#isPotentiallyPlaying() && !this.#seeking) {
+      void this.#audioContext?.resume();
       if (this.#advanceLoop === 0) {
         this.#lastAdvanceTime = performance.now();
+        this.#lastAudioTimestamp = this.#audioContext?.currentTime ?? 0;
         this.#advanceLoop = requestAnimationFrame((now) => {
           this.#advanceCurrentTime(now);
         });
       }
     } else if (this.#advanceLoop !== 0) {
+      void this.#audioContext?.suspend();
       cancelAnimationFrame(this.#advanceLoop);
       this.#advanceLoop = 0;
     }
@@ -358,20 +426,31 @@ export class BabyVideoElement extends HTMLElement {
     // its current playback position must increase monotonically at the element's playbackRate units
     // of media time per unit time of the media timeline's clock.
     if (this.#isPotentiallyPlaying() && !this.#seeking) {
+      let elapsedTime: number;
+      // Use audio clock as sync, otherwise use wall-clock time.
+      if (
+        this.#audioContext !== undefined &&
+        this.#audioContext.state === "running"
+      ) {
+        elapsedTime = this.#audioContext.currentTime - this.#lastAudioTimestamp;
+      } else {
+        elapsedTime = (now - this.#lastAdvanceTime) / 1000;
+      }
       const newTime =
-        this.#currentTime +
-        (this.#playbackRate * Math.max(0, now - this.#lastAdvanceTime)) / 1000;
+        this.#currentTime + this.#playbackRate * Math.max(0, elapsedTime);
       // Do not advance outside the current buffered range.
-      const currentRange = this.buffered.find(this.#currentTime)!;
-      return Math.min(Math.max(currentRange[0], newTime), currentRange[1]);
-    } else {
-      return this.#currentTime;
+      const currentRange = this.buffered.find(this.#currentTime);
+      if (currentRange !== undefined) {
+        return Math.min(Math.max(currentRange[0], newTime), currentRange[1]);
+      }
     }
+    return this.#currentTime;
   }
 
   #updateCurrentTime(currentTime: number) {
     this.#currentTime = currentTime;
     this.#decodeVideoFrames();
+    this.#decodeAudio();
     if (this.#srcObject) {
       checkBuffer(this.#srcObject);
     }
@@ -432,7 +511,9 @@ export class BabyVideoElement extends HTMLElement {
   #advanceCurrentTime(now: number): void {
     this.#updateCurrentTime(this.#getCurrentPlaybackPosition(now));
     this.#renderVideoFrame();
+    this.#renderAudio();
     this.#lastAdvanceTime = now;
+    this.#lastAudioTimestamp = this.#audioContext?.currentTime ?? 0;
     this.#timeMarchesOn(true, now);
     if (this.#isPotentiallyPlaying() && !this.#seeking) {
       this.#advanceLoop = requestAnimationFrame((now) =>
@@ -482,6 +563,7 @@ export class BabyVideoElement extends HTMLElement {
     queueTask(() => this.dispatchEvent(new Event("seeking")));
     // 11. Set the current playback position to the new playback position.
     this.#resetVideoDecoder();
+    this.#resetAudioDecoder();
     this.#updateCurrentTime(newPosition);
     this.#updatePlaying();
     // 12. Wait until the user agent has established whether or not the media data for the new playback position
@@ -503,8 +585,10 @@ export class BabyVideoElement extends HTMLElement {
     while (true) {
       if (this.#readyState <= MediaReadyState.HAVE_CURRENT_DATA) {
         await waitForEvent(this, "canplay", signal);
-      } else if (!this.#hasDecodedFrameAtTime(timeInMicros)) {
-        await this.#waitForNextDecodedFrame(signal);
+      } else if (!this.#hasDecodedVideoFrameAtTime(timeInMicros)) {
+        await this.#waitForNextDecodedVideoFrame(signal);
+      } else if (!this.#hasDecodedAudioFrameAtTime(timeInMicros)) {
+        await this.#waitForNextDecodedAudioFrame(signal);
       } else {
         break;
       }
@@ -522,18 +606,35 @@ export class BabyVideoElement extends HTMLElement {
     queueTask(() => this.dispatchEvent(new Event("seeked")));
   }
 
-  #hasDecodedFrameAtTime(timeInMicros: number): boolean {
-    return this.#decodedVideoFrames.some(
-      (frame) =>
-        frame.timestamp! <= timeInMicros &&
-        timeInMicros < frame.timestamp! + frame.duration!
+  #hasDecodedVideoFrameAtTime(timeInMicros: number): boolean {
+    return this.#hasDecodedFrameAtTime(this.#decodedVideoFrames, timeInMicros);
+  }
+
+  #hasDecodedAudioFrameAtTime(timeInMicros: number): boolean {
+    return this.#hasDecodedFrameAtTime(this.#decodedAudioFrames, timeInMicros);
+  }
+
+  #hasDecodedFrameAtTime(
+    frames: ReadonlyArray<VideoFrame | AudioData>,
+    timeInMicros: number
+  ): boolean {
+    return frames.some(
+      (frame: VideoFrame | AudioData) =>
+        frame.timestamp <= timeInMicros &&
+        timeInMicros < frame.timestamp + frame.duration!
     );
   }
 
-  async #waitForNextDecodedFrame(signal: AbortSignal): Promise<void> {
-    this.#nextDecodedFramePromise = new Deferred<void>();
-    this.#nextDecodedFramePromise.follow(signal);
-    await this.#nextDecodedFramePromise.promise;
+  async #waitForNextDecodedVideoFrame(signal: AbortSignal): Promise<void> {
+    this.#nextDecodedVideoFramePromise = new Deferred<void>();
+    this.#nextDecodedVideoFramePromise.follow(signal);
+    await this.#nextDecodedVideoFramePromise.promise;
+  }
+
+  async #waitForNextDecodedAudioFrame(signal: AbortSignal): Promise<void> {
+    this.#nextDecodedAudioFramePromise = new Deferred<void>();
+    this.#nextDecodedAudioFramePromise.follow(signal);
+    await this.#nextDecodedAudioFramePromise.promise;
   }
 
   #decodeVideoFrames(): void {
@@ -547,6 +648,14 @@ export class BabyVideoElement extends HTMLElement {
     }
     const direction =
       this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
+    // Check if last decoded frame still exists, i.e. it was not overwritten
+    // or removed from the SourceBuffer
+    if (
+      this.#furthestDecodingVideoFrame !== undefined &&
+      !videoTrackBuffer.hasFrame(this.#furthestDecodingVideoFrame)
+    ) {
+      this.#furthestDecodingVideoFrame = undefined;
+    }
     // Decode frames for current time
     if (this.#furthestDecodingVideoFrame === undefined) {
       const frameAtTime = videoTrackBuffer.findFrameForTime(this.currentTime);
@@ -580,28 +689,30 @@ export class BabyVideoElement extends HTMLElement {
     decodeQueue: VideoDecodeQueue,
     direction: Direction
   ): void {
+    const { frames, codecConfig } = decodeQueue;
     if (
       this.#videoDecoder.state === "unconfigured" ||
-      this.#lastVideoDecoderConfig !== decodeQueue.codecConfig
+      this.#lastVideoDecoderConfig !== codecConfig
     ) {
-      this.#videoDecoder.configure(decodeQueue.codecConfig);
-      this.#lastVideoDecoderConfig = decodeQueue.codecConfig;
+      this.#videoDecoder.configure(codecConfig);
+      this.#lastVideoDecoderConfig = codecConfig;
     }
-    for (const frame of decodeQueue.frames) {
+    for (const frame of frames) {
       this.#videoDecoder.decode(frame);
       this.#decodingVideoFrames.push(frame);
     }
+    // The "furthest decoded frame" depends on the rendering order,
+    // since we must decode the frames in their original order.
     if (direction == Direction.FORWARD) {
-      this.#furthestDecodingVideoFrame =
-        decodeQueue.frames[decodeQueue.frames.length - 1];
+      this.#furthestDecodingVideoFrame = frames[frames.length - 1];
     } else {
-      this.#furthestDecodingVideoFrame = decodeQueue.frames[0];
+      this.#furthestDecodingVideoFrame = frames[0];
     }
   }
 
   async #onVideoFrame(frame: VideoFrame) {
-    const decodingFrameIndex = this.#decodingVideoFrames.findIndex(
-      (x) => x.timestamp === frame.timestamp
+    const decodingFrameIndex = this.#decodingVideoFrames.findIndex((x) =>
+      isFrameTimestampEqual(x, frame)
     );
     if (decodingFrameIndex < 0) {
       // Drop frames that are no longer in the decode queue.
@@ -609,14 +720,12 @@ export class BabyVideoElement extends HTMLElement {
       return;
     }
     const decodingFrame = this.#decodingVideoFrames[decodingFrameIndex];
-    this.#decodingVideoFrames.splice(decodingFrameIndex, 1);
+    arrayRemoveAt(this.#decodingVideoFrames, decodingFrameIndex);
     // Drop frames that are beyond current time, since we're too late to render them.
     const currentTimeInMicros = 1e6 * this.#currentTime;
     const direction =
       this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
-    if (
-      this.#isFrameBeyondTime(decodingFrame, direction, currentTimeInMicros)
-    ) {
+    if (isFrameBeyondTime(decodingFrame, direction, currentTimeInMicros)) {
       frame.close();
       // Decode more frames (if we now have more space in the queue)
       this.#decodeVideoFrames();
@@ -633,9 +742,9 @@ export class BabyVideoElement extends HTMLElement {
     frame.close();
     frame = newFrame;
     this.#decodedVideoFrames.push(newFrame);
-    if (this.#nextDecodedFramePromise) {
-      this.#nextDecodedFramePromise.resolve();
-      this.#nextDecodedFramePromise = undefined;
+    if (this.#nextDecodedVideoFramePromise) {
+      this.#nextDecodedVideoFramePromise.resolve();
+      this.#nextDecodedVideoFramePromise = undefined;
     }
     // Schedule render immediately if this is the first decoded frame after a seek
     if (this.#lastRenderedFrame === undefined) {
@@ -643,18 +752,6 @@ export class BabyVideoElement extends HTMLElement {
     }
     // Decode more frames (if we now have more space in the queue)
     this.#decodeVideoFrames();
-  }
-
-  #isFrameBeyondTime(
-    frame: EncodedVideoChunk | VideoFrame,
-    direction: Direction,
-    timeInMicros: number
-  ): boolean {
-    if (direction == Direction.FORWARD) {
-      return frame.timestamp! + frame.duration! <= timeInMicros;
-    } else {
-      return frame.timestamp! >= timeInMicros;
-    }
   }
 
   #scheduleRenderVideoFrame() {
@@ -673,33 +770,36 @@ export class BabyVideoElement extends HTMLElement {
     // Drop all frames that are before current time, since we're too late to render them.
     for (let i = this.#decodedVideoFrames.length - 1; i >= 0; i--) {
       const frame = this.#decodedVideoFrames[i];
-      if (this.#isFrameBeyondTime(frame, direction, currentTimeInMicros)) {
+      if (isFrameBeyondTime(frame, direction, currentTimeInMicros)) {
         frame.close();
-        this.#decodedVideoFrames.splice(i, 1);
+        arrayRemoveAt(this.#decodedVideoFrames, i);
       }
     }
     // Render the frame at current time.
     let currentFrameIndex = this.#decodedVideoFrames.findIndex((frame) => {
       return (
-        frame.timestamp! <= currentTimeInMicros &&
-        currentTimeInMicros < frame.timestamp! + frame.duration!
+        frame.timestamp <= currentTimeInMicros &&
+        currentTimeInMicros < frame.timestamp + frame.duration!
       );
     });
-    if (currentFrameIndex >= 0) {
-      const frame = this.#decodedVideoFrames[currentFrameIndex];
-      if (this.#lastRenderedFrame !== frame.timestamp!) {
-        this.#updateSize(frame.displayWidth, frame.displayHeight);
-        this.#canvasContext.drawImage(
-          frame,
-          0,
-          0,
-          frame.displayWidth,
-          frame.displayHeight
-        );
-        this.#decodedVideoFrames.splice(currentFrameIndex, 1);
-        this.#lastRenderedFrame = frame.timestamp!;
-        frame.close();
-      }
+    if (currentFrameIndex < 0) {
+      // Decode more frames (if we now have more space in the queue)
+      this.#decodeVideoFrames();
+      return;
+    }
+    const frame = this.#decodedVideoFrames[currentFrameIndex];
+    if (this.#lastRenderedFrame !== frame.timestamp) {
+      this.#updateSize(frame.displayWidth, frame.displayHeight);
+      this.#canvasContext.drawImage(
+        frame,
+        0,
+        0,
+        frame.displayWidth,
+        frame.displayHeight
+      );
+      arrayRemoveAt(this.#decodedVideoFrames, currentFrameIndex);
+      this.#lastRenderedFrame = frame.timestamp;
+      frame.close();
     }
     // Decode more frames (if we now have more space in the queue)
     this.#decodeVideoFrames();
@@ -715,6 +815,344 @@ export class BabyVideoElement extends HTMLElement {
     this.#decodingVideoFrames.length = 0;
     this.#decodedVideoFrames.length = 0;
     this.#videoDecoder.reset();
+  }
+
+  #decodeAudio(): void {
+    const mediaSource = this.#srcObject;
+    if (!mediaSource) {
+      return;
+    }
+    const audioTrackBuffer = getActiveAudioTrackBuffer(mediaSource);
+    if (!audioTrackBuffer) {
+      return;
+    }
+    const direction =
+      this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
+    // Check if last decoded frame still exists, i.e. it was not overwritten
+    // or removed from the SourceBuffer
+    if (
+      this.#furthestDecodedAudioFrame !== undefined &&
+      !audioTrackBuffer.hasFrame(this.#furthestDecodedAudioFrame)
+    ) {
+      this.#furthestDecodedAudioFrame = undefined;
+    }
+    // Decode audio for current time
+    if (this.#furthestDecodedAudioFrame === undefined) {
+      const frameAtTime = audioTrackBuffer.findFrameForTime(this.currentTime);
+      if (frameAtTime === undefined) {
+        return;
+      }
+      this.#processAudioDecodeQueue(
+        audioTrackBuffer.getDecodeDependenciesForFrame(frameAtTime),
+        direction
+      );
+    }
+    // Decode next frames in advance
+    while (
+      this.#decodingAudioFrames.length + this.#decodedAudioFrames.length <
+      decodeQueueLwm
+    ) {
+      const nextQueue = audioTrackBuffer.getNextFrames(
+        this.#furthestDecodedAudioFrame!,
+        decodeQueueHwm -
+          (this.#decodingAudioFrames.length + this.#decodedAudioFrames.length),
+        direction
+      );
+      if (nextQueue === undefined) {
+        break;
+      }
+      this.#processAudioDecodeQueue(nextQueue, direction);
+    }
+  }
+
+  #processAudioDecodeQueue(
+    decodeQueue: AudioDecodeQueue,
+    direction: Direction
+  ): void {
+    const { frames, codecConfig } = decodeQueue;
+    if (
+      this.#audioDecoder.state === "unconfigured" ||
+      this.#lastAudioDecoderConfig !== codecConfig
+    ) {
+      this.#audioDecoder.configure(codecConfig);
+      this.#lastAudioDecoderConfig = codecConfig;
+    }
+    if (direction === Direction.BACKWARD) {
+      // Audio has no dependencies between frames, so we can decode them
+      // in the same order as they will be rendered.
+      frames.reverse();
+    }
+    for (const frame of frames) {
+      // AudioDecoder does not always preserve EncodedAudioChunk.timestamp
+      // to the decoded AudioData.timestamp, instead it adds up the sample durations
+      // since the last decoded chunk. This breaks reverse playback, since we
+      // intentionally feed the decoder chunks in the "wrong" order.
+      // Copy to a new chunk with the same *increasing* timestamp,
+      // and fix the timestamp later on.
+      const newFrame = cloneEncodedAudioChunk(
+        frame,
+        this.#audioDecoderTimestamp
+      );
+      this.#originalDecodingAudioFrames.set(newFrame, frame);
+      this.#audioDecoder.decode(newFrame);
+      this.#decodingAudioFrames.push(newFrame);
+      this.#audioDecoderTimestamp += frame.duration!;
+    }
+    // The "furthest audio frame" is always the last one,
+    // since we decode them in rendering order (see above).
+    this.#furthestDecodedAudioFrame = frames[frames.length - 1];
+  }
+
+  #onAudioData(frame: AudioData): void {
+    const decodingFrameIndex = this.#decodingAudioFrames.findIndex((x) =>
+      isFrameTimestampEqual(x, frame)
+    );
+    if (decodingFrameIndex < 0) {
+      // Drop frames that are no longer in the decode queue.
+      frame.close();
+      return;
+    }
+    const decodingFrame = this.#decodingAudioFrames[decodingFrameIndex];
+    arrayRemoveAt(this.#decodingAudioFrames, decodingFrameIndex);
+    // Restore original timestamp
+    const decodedFrame = cloneAudioData(
+      frame,
+      this.#originalDecodingAudioFrames.get(decodingFrame)!.timestamp
+    );
+    frame.close();
+    // Drop frames that are beyond current time, since we're too late to render them.
+    const currentTimeInMicros = 1e6 * this.#currentTime;
+    const direction =
+      this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
+    if (isFrameBeyondTime(decodedFrame, direction, currentTimeInMicros)) {
+      decodedFrame.close();
+      // Decode more frames (if we now have more space in the queue)
+      this.#decodeAudio();
+      return;
+    }
+    this.#decodedAudioFrames.push(decodedFrame);
+    if (this.#nextDecodedAudioFramePromise) {
+      this.#nextDecodedAudioFramePromise.resolve();
+      this.#nextDecodedAudioFramePromise = undefined;
+    }
+    // Decode more frames (if we now have more space in the queue)
+    this.#decodeAudio();
+  }
+
+  #initializeAudio(sampleRate: number): AudioContext {
+    this.#audioContext = new AudioContext({
+      sampleRate: sampleRate,
+      latencyHint: "playback"
+    });
+
+    this.#volumeGainNode = new GainNode(this.#audioContext);
+    this.#volumeGainNode.connect(this.#audioContext.destination);
+    this.#updateVolume();
+
+    if (this.#isPotentiallyPlaying() && !this.#seeking) {
+      void this.#audioContext.resume();
+    } else {
+      void this.#audioContext.suspend();
+    }
+
+    return this.#audioContext;
+  }
+
+  #renderAudio() {
+    const currentTimeInMicros = 1e6 * this.#currentTime;
+    const direction =
+      this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
+    // Drop all frames that are before current time, since we're too late to render them.
+    for (let i = this.#decodedAudioFrames.length - 1; i >= 0; i--) {
+      const frame = this.#decodedAudioFrames[i];
+      if (isFrameBeyondTime(frame, direction, currentTimeInMicros)) {
+        frame.close();
+        arrayRemoveAt(this.#decodedAudioFrames, i);
+      }
+    }
+    // Don't render audio while playback is stopped.
+    if (this.#playbackRate === 0) return;
+    let nextFrameIndex: number = -1;
+    if (this.#lastScheduledAudioFrameTime >= 0) {
+      // Render the next frame.
+      nextFrameIndex = this.#decodedAudioFrames.findIndex((frame) => {
+        if (direction === Direction.BACKWARD) {
+          return (
+            frame.timestamp + frame.duration ===
+            this.#lastScheduledAudioFrameTime
+          );
+        } else {
+          return frame.timestamp === this.#lastScheduledAudioFrameTime;
+        }
+      });
+    }
+    if (nextFrameIndex < 0) {
+      // Render the frame at current time.
+      nextFrameIndex = this.#decodedAudioFrames.findIndex((frame) => {
+        return (
+          frame.timestamp <= currentTimeInMicros &&
+          currentTimeInMicros < frame.timestamp + frame.duration
+        );
+      });
+    }
+    if (nextFrameIndex < 0) {
+      // Decode more frames (if we now have more space in the queue)
+      this.#decodeAudio();
+      return;
+    }
+    // Collect as many consecutive audio frames as possible
+    // to schedule in a single batch.
+    const firstFrame = this.#decodedAudioFrames[nextFrameIndex];
+    const frames: AudioData[] = [firstFrame];
+    for (
+      let frameIndex = nextFrameIndex + 1;
+      frameIndex < this.#decodedAudioFrames.length;
+      frameIndex++
+    ) {
+      const frame = this.#decodedAudioFrames[frameIndex];
+      const previousFrame = frames[frames.length - 1];
+      if (
+        isConsecutiveAudioFrame(previousFrame, frame, direction) &&
+        frame.format === firstFrame.format &&
+        frame.numberOfChannels === firstFrame.numberOfChannels &&
+        frame.sampleRate === firstFrame.sampleRate
+      ) {
+        // This frame is consecutive with the previous frame.
+        frames.push(frame);
+      } else {
+        // This frame is not consecutive. We can't schedule this in the same batch.
+        break;
+      }
+    }
+    if (direction === Direction.BACKWARD) {
+      frames.reverse();
+    }
+    this.#audioContext ??= this.#initializeAudio(firstFrame.sampleRate);
+    this.#renderAudioFrame(frames, currentTimeInMicros, direction);
+    // Decode more frames (if we now have more space in the queue)
+    this.#decodeAudio();
+  }
+
+  #renderAudioFrame(
+    frames: AudioData[],
+    currentTimeInMicros: number,
+    direction: Direction
+  ) {
+    const firstFrame = frames[0];
+    const lastFrame = frames[frames.length - 1];
+    let firstTimestamp: number;
+    let lastTimestamp: number;
+    if (direction === Direction.BACKWARD) {
+      firstTimestamp = lastFrame.timestamp + lastFrame.duration;
+      lastTimestamp = firstFrame.timestamp;
+    } else {
+      firstTimestamp = firstFrame.timestamp;
+      lastTimestamp = lastFrame.timestamp + lastFrame.duration;
+    }
+    // Create an AudioBuffer containing all frame data
+    const { numberOfChannels, sampleRate } = frames[0];
+    const audioBuffer = new AudioBuffer({
+      numberOfChannels,
+      length: frames.reduce(
+        (totalFrames, frame) => totalFrames + frame.numberOfFrames,
+        0
+      ),
+      sampleRate
+    });
+    for (let channel = 0; channel < numberOfChannels; channel++) {
+      const options: AudioDataCopyToOptions = {
+        format: "f32-planar",
+        planeIndex: channel
+      };
+      const destination = audioBuffer.getChannelData(channel);
+      let offset = 0;
+      for (const frame of frames) {
+        const size =
+          frame.allocationSize(options) / Float32Array.BYTES_PER_ELEMENT;
+        frame.copyTo(destination.subarray(offset, offset + size), options);
+        offset += size;
+      }
+      if (direction === Direction.BACKWARD) {
+        // For reverse playback, reverse the order of the individual samples.
+        destination.reverse();
+      }
+    }
+    // Schedule an AudioBufferSourceNode to play the AudioBuffer
+    this.#scheduleAudioBuffer(
+      audioBuffer,
+      firstTimestamp,
+      currentTimeInMicros,
+      this.#playbackRate
+    );
+    this.#lastScheduledAudioFrameTime = lastTimestamp;
+    // Close the frames, so the audio decoder can reclaim them.
+    for (let i = frames.length - 1; i >= 0; i--) {
+      const frame = frames[i];
+      frame.close();
+      arrayRemove(this.#decodedAudioFrames, frame);
+    }
+  }
+
+  #resetAudioDecoder(): void {
+    for (const frame of this.#decodedAudioFrames) {
+      frame.close();
+    }
+    for (const audioSourceNode of this.#scheduledAudioSourceNodes) {
+      audioSourceNode.node.stop();
+    }
+    this.#lastAudioDecoderConfig = undefined;
+    this.#audioDecoderTimestamp = 0;
+    this.#furthestDecodedAudioFrame = undefined;
+    this.#decodingAudioFrames.length = 0;
+    this.#decodedAudioFrames.length = 0;
+    this.#scheduledAudioSourceNodes.length = 0;
+    this.#lastScheduledAudioFrameTime = -1;
+    this.#audioDecoder.reset();
+  }
+
+  #updateVolume(): void {
+    if (this.#volumeGainNode === undefined) return;
+    this.#volumeGainNode.gain.value = this.#muted ? 0 : this.#volume;
+  }
+
+  #updateAudioPlaybackRate() {
+    // Re-schedule all audio nodes with the new playback rate.
+    const currentTimeInMicros = 1e6 * this.#currentTime;
+    const playbackRate = this.#playbackRate;
+    for (const entry of this.#scheduledAudioSourceNodes.slice()) {
+      entry.node.stop();
+      this.#scheduleAudioBuffer(
+        entry.node.buffer!,
+        entry.timestamp,
+        currentTimeInMicros,
+        playbackRate
+      );
+    }
+  }
+
+  #scheduleAudioBuffer(
+    audioBuffer: AudioBuffer,
+    timestamp: number,
+    currentTimeInMicros: number,
+    playbackRate: number
+  ): void {
+    const node = this.#audioContext!.createBufferSource();
+    node.buffer = audioBuffer;
+    node.connect(this.#volumeGainNode!);
+
+    const entry = { node: node, timestamp };
+    this.#scheduledAudioSourceNodes.push(entry);
+    node.addEventListener("ended", () => {
+      arrayRemove(this.#scheduledAudioSourceNodes, entry);
+    });
+
+    const offset = (timestamp - currentTimeInMicros) / (1e6 * playbackRate);
+    node.playbackRate.value = Math.abs(playbackRate);
+    if (offset > 0) {
+      node.start(0, offset);
+    } else {
+      node.start(-offset);
+    }
   }
 
   #isPotentiallyPlaying(): boolean {
@@ -811,6 +1249,9 @@ export class BabyVideoElement extends HTMLElement {
       if (!this.#paused) {
         this.#notifyAboutPlaying();
       }
+      // Decode more frames
+      this.#decodeVideoFrames();
+      this.#decodeAudio();
     }
     // If the new ready state is HAVE_ENOUGH_DATA
     if (newReadyState === MediaReadyState.HAVE_ENOUGH_DATA) {
@@ -880,3 +1321,94 @@ export class BabyVideoElement extends HTMLElement {
 }
 
 customElements.define("baby-video", BabyVideoElement);
+
+function isFrameBeyondTime(
+  frame: EncodedChunk | AudioData | VideoFrame,
+  direction: Direction,
+  timeInMicros: number
+): boolean {
+  if (direction == Direction.FORWARD) {
+    return frame.timestamp + frame.duration! <= timeInMicros;
+  } else {
+    return frame.timestamp >= timeInMicros;
+  }
+}
+
+function getFrameTolerance(frame: EncodedChunk | AudioData | VideoFrame) {
+  return Math.ceil(frame.duration! / 16);
+}
+
+function isFrameTimestampEqual(
+  left: EncodedChunk,
+  right: AudioData | VideoFrame
+): boolean {
+  // Due to rounding, there can be a small gap between encoded and decoded frames.
+  return Math.abs(left.timestamp - right.timestamp) <= getFrameTolerance(left);
+}
+
+function isConsecutiveAudioFrame(
+  previous: AudioData,
+  next: AudioData,
+  direction: Direction
+): boolean {
+  let diff: number;
+  if (direction === Direction.BACKWARD) {
+    diff = previous.timestamp - (next.timestamp + next.duration);
+  } else {
+    diff = next.timestamp - (previous.timestamp + previous.duration);
+  }
+  // Due to rounding, there can be a small gap between consecutive audio frames.
+  return Math.abs(diff) <= getFrameTolerance(previous);
+}
+
+function cloneEncodedAudioChunk(
+  original: EncodedAudioChunk,
+  timestamp: number
+): EncodedAudioChunk {
+  const data = new ArrayBuffer(original.byteLength);
+  original.copyTo(data);
+  return new EncodedAudioChunk({
+    data,
+    timestamp,
+    duration: original.duration ?? undefined,
+    type: original.type
+  });
+}
+
+function cloneAudioData(original: AudioData, timestamp: number): AudioData {
+  const format = "f32-planar";
+  let totalSize = 0;
+  for (
+    let channelIndex = 0;
+    channelIndex < original.numberOfChannels;
+    channelIndex++
+  ) {
+    totalSize +=
+      original.allocationSize({ format, planeIndex: channelIndex }) /
+      Float32Array.BYTES_PER_ELEMENT;
+  }
+  const buffer = new Float32Array(totalSize);
+  let offset = 0;
+  for (
+    let channelIndex = 0;
+    channelIndex < original.numberOfChannels;
+    channelIndex++
+  ) {
+    const options: AudioDataCopyToOptions = {
+      format,
+      planeIndex: channelIndex
+    };
+    const channelSize =
+      original.allocationSize(options) / Float32Array.BYTES_PER_ELEMENT;
+    original.copyTo(buffer.subarray(offset, offset + totalSize), options);
+    offset += channelSize;
+  }
+  return new AudioData({
+    data: buffer,
+    format,
+    numberOfChannels: original.numberOfChannels,
+    numberOfFrames: original.numberOfFrames,
+    sampleRate: original.sampleRate,
+    timestamp: timestamp
+  });
+}

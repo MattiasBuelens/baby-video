@@ -8,6 +8,7 @@ import {
   DataStream,
   Info,
   ISOFile,
+  Mp4aBox,
   MP4ArrayBuffer,
   MP4BoxStream,
   Sample,
@@ -20,6 +21,7 @@ import {
   durationChange,
   endOfStream,
   getMediaElement,
+  hasSomeBuffer,
   openIfEnded
 } from "./media-source";
 import {
@@ -37,6 +39,9 @@ import { setEndTimeOnLastRange, TimeRanges } from "./time-ranges";
 export let getVideoTrackBuffer: (
   sourceBuffer: BabySourceBuffer
 ) => VideoTrackBuffer | undefined;
+export let getAudioTrackBuffer: (
+  sourceBuffer: BabySourceBuffer
+) => AudioTrackBuffer | undefined;
 
 export class BabySourceBuffer extends EventTarget {
   readonly #parent: BabyMediaSource;
@@ -355,7 +360,9 @@ export class BabySourceBuffer extends EventTarget {
         return;
       }
       // * The codecs for each track are supported by the user agent.
-      const audioTrackConfigs = info.audioTracks.map(buildAudioConfig);
+      const audioTrackConfigs = info.audioTracks.map((trackInfo) =>
+        buildAudioConfig(trackInfo, this.#isoFile!.getTrackById(trackInfo.id))
+      );
       const videoTrackConfigs = info.videoTracks.map((trackInfo) =>
         buildVideoConfig(trackInfo, this.#isoFile!.getTrackById(trackInfo.id))
       );
@@ -399,7 +406,9 @@ export class BabySourceBuffer extends EventTarget {
       // 5.1. If the initialization segment contains tracks with codecs
       //      the user agent does not support, then run the append error
       //      algorithm and abort these steps.
-      const audioTrackConfigs = info.audioTracks.map(buildAudioConfig);
+      const audioTrackConfigs = info.audioTracks.map((trackInfo) =>
+        buildAudioConfig(trackInfo, this.#isoFile!.getTrackById(trackInfo.id))
+      );
       const videoTrackConfigs = info.videoTracks.map((trackInfo) =>
         buildVideoConfig(trackInfo, this.#isoFile!.getTrackById(trackInfo.id))
       );
@@ -506,6 +515,8 @@ export class BabySourceBuffer extends EventTarget {
     const mediaElement = getMediaElement(this.#parent)!;
     const buffered = mediaElement.buffered;
     const currentTime = mediaElement.currentTime;
+    const duration = this.#parent.duration;
+    const playbackRate = mediaElement.playbackRate;
     if (
       mediaElement.readyState === MediaReadyState.HAVE_METADATA &&
       buffered.contains(currentTime)
@@ -518,7 +529,7 @@ export class BabySourceBuffer extends EventTarget {
     //    attribute to HAVE_FUTURE_DATA.
     if (
       mediaElement.readyState === MediaReadyState.HAVE_CURRENT_DATA &&
-      buffered.containsRange(currentTime, currentTime + 0.1)
+      hasSomeBuffer(buffered, currentTime, duration, playbackRate)
     ) {
       updateReadyState(mediaElement, MediaReadyState.HAVE_FUTURE_DATA);
     }
@@ -601,12 +612,12 @@ export class BabySourceBuffer extends EventTarget {
           if (trackBuffer.type === "video") {
             // 1. Let remove window timestamp equal the overlapped frame presentation timestamp
             //    plus 1 microsecond.
-            const removeWindowTimestamp = overlappedFrame.timestamp! + 1;
+            const removeWindowTimestamp = overlappedFrame.timestamp + 1;
             // 2. If the presentation timestamp is less than the remove window timestamp,
             //   then remove overlapped frame from track buffer.
             if (1e6 * pts < removeWindowTimestamp) {
               trackBuffer.removeSamples(
-                overlappedFrame.timestamp!,
+                overlappedFrame.timestamp,
                 removeWindowTimestamp
               );
             }
@@ -738,8 +749,16 @@ export class BabySourceBuffer extends EventTarget {
     );
   }
 
+  #getAudioTrackBuffer(): AudioTrackBuffer | undefined {
+    return this.#trackBuffers.find(
+      (trackBuffer): trackBuffer is AudioTrackBuffer =>
+        trackBuffer instanceof AudioTrackBuffer
+    );
+  }
+
   static {
     getVideoTrackBuffer = (sourceBuffer) => sourceBuffer.#getVideoTrackBuffer();
+    getAudioTrackBuffer = (sourceBuffer) => sourceBuffer.#getAudioTrackBuffer();
   }
 }
 
@@ -747,11 +766,15 @@ function toMP4ArrayBuffer(ab: ArrayBuffer, fileStart: number): MP4ArrayBuffer {
   return Object.assign(ab, { fileStart });
 }
 
-function buildAudioConfig(info: AudioTrackInfo): AudioDecoderConfig {
+function buildAudioConfig(
+  info: AudioTrackInfo,
+  trak: TrakBox
+): AudioDecoderConfig {
   return {
     codec: info.codec,
     numberOfChannels: info.audio.channel_count,
-    sampleRate: info.audio.sample_rate
+    sampleRate: info.audio.sample_rate,
+    description: getAudioSpecificConfig(trak)
   };
 }
 
@@ -771,6 +794,10 @@ function isAvcEntry(entry: Box): entry is AvcBox {
   return (entry as AvcBox).avcC !== undefined;
 }
 
+function isMp4aEntry(entry: Box): entry is Mp4aBox {
+  return entry.type === "mp4a";
+}
+
 function createAvcDecoderConfigurationRecord(
   trak: TrakBox
 ): Uint8Array | undefined {
@@ -782,6 +809,21 @@ function createAvcDecoderConfigurationRecord(
   const stream = new DataStream(undefined, 0, DataStream.BIG_ENDIAN);
   avcC.write(stream);
   return new Uint8Array(stream.buffer, 8); // remove the box header
+}
+
+function getAudioSpecificConfig(trak: TrakBox): Uint8Array | undefined {
+  const descriptor =
+    trak.mdia.minf.stbl.stsd.entries.find(isMp4aEntry)?.esds.esd.descs[0];
+  if (!descriptor) {
+    return undefined;
+  }
+  // 0x04 is the DecoderConfigDescrTag. Assuming MP4Box always puts this at position 0.
+  console.assert(descriptor.tag == 0x04);
+  // 0x40 is the Audio OTI, per table 5 of ISO 14496-1
+  console.assert(descriptor.oti == 0x40);
+  // 0x05 is the DecSpecificInfoTag
+  console.assert(descriptor.descs[0].tag == 0x05);
+  return descriptor.descs[0].data;
 }
 
 function hasMatchingTrackIds(

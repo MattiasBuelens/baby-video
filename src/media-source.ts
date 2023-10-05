@@ -1,4 +1,8 @@
-import { BabySourceBuffer, getVideoTrackBuffer } from "./source-buffer";
+import {
+  BabySourceBuffer,
+  getAudioTrackBuffer,
+  getVideoTrackBuffer
+} from "./source-buffer";
 import {
   BabyVideoElement,
   MediaReadyState,
@@ -7,7 +11,7 @@ import {
   updateReadyState
 } from "./video-element";
 import { queueTask } from "./util";
-import { VideoTrackBuffer } from "./track-buffer";
+import { AudioTrackBuffer, VideoTrackBuffer } from "./track-buffer";
 import { setEndTimeOnLastRange, TimeRanges } from "./time-ranges";
 
 export type MediaSourceReadyState = "closed" | "ended" | "open";
@@ -32,6 +36,9 @@ export let getBuffered: (mediaSource: BabyMediaSource) => TimeRanges;
 export let getActiveVideoTrackBuffer: (
   mediaSource: BabyMediaSource
 ) => VideoTrackBuffer | undefined;
+export let getActiveAudioTrackBuffer: (
+  mediaSource: BabyMediaSource
+) => AudioTrackBuffer | undefined;
 export let openIfEnded: (mediaSource: BabyMediaSource) => void;
 export let checkBuffer: (mediaSource: BabyMediaSource) => void;
 
@@ -222,6 +229,16 @@ export class BabyMediaSource extends EventTarget {
     return undefined;
   }
 
+  #getActiveAudioTrackBuffer(): AudioTrackBuffer | undefined {
+    for (const sourceBuffer of this.#sourceBuffers) {
+      const audioTrackBuffer = getAudioTrackBuffer(sourceBuffer);
+      if (audioTrackBuffer) {
+        return audioTrackBuffer;
+      }
+    }
+    return undefined;
+  }
+
   #getBuffered(): TimeRanges {
     // https://w3c.github.io/media-source/#htmlmediaelement-extensions-buffered
     // 2.1. Let recent intersection ranges equal an empty TimeRanges object.
@@ -262,6 +279,8 @@ export class BabyMediaSource extends EventTarget {
     }
     const buffered = this.#getBuffered();
     const currentTime = mediaElement.currentTime;
+    const duration = this.#duration;
+    const playbackRate = mediaElement.playbackRate;
     const currentRange = buffered.find(currentTime);
     // If HTMLMediaElement.buffered does not contain a TimeRanges for the current playback position:
     if (currentRange === undefined) {
@@ -281,7 +300,7 @@ export class BabyMediaSource extends EventTarget {
     }
     // If HTMLMediaElement.buffered contains a TimeRanges that includes the current playback position
     // and some time beyond the current playback position, then run the following steps:
-    if (buffered.containsRange(currentTime, currentTime + 0.1)) {
+    if (hasSomeBuffer(buffered, currentTime, duration, playbackRate)) {
       // Set the HTMLMediaElement.readyState attribute to HAVE_FUTURE_DATA.
       // Playback may resume at this point if it was previously suspended by a transition to HAVE_CURRENT_DATA.
       updateReadyState(mediaElement, MediaReadyState.HAVE_FUTURE_DATA);
@@ -312,10 +331,28 @@ export class BabyMediaSource extends EventTarget {
     openIfEnded = (mediaSource) => mediaSource.#openIfEnded();
     getActiveVideoTrackBuffer = (mediaSource) =>
       mediaSource.#getActiveVideoTrackBuffer();
+    getActiveAudioTrackBuffer = (mediaSource) =>
+      mediaSource.#getActiveAudioTrackBuffer();
     checkBuffer = (mediaSource) => mediaSource.#checkBuffer();
   }
 }
 
 function getHighestEndTime(buffered: TimeRanges): number {
   return buffered.length > 0 ? buffered.end(buffered.length - 1) : 0;
+}
+
+export function hasSomeBuffer(
+  buffered: TimeRanges,
+  currentTime: number,
+  duration: number,
+  playbackRate: number
+): boolean {
+  if (playbackRate >= 0) {
+    return buffered.containsRange(
+      currentTime,
+      Math.min(currentTime + 0.1, duration)
+    );
+  } else {
+    return buffered.containsRange(Math.max(0, currentTime - 0.1), currentTime);
+  }
 }

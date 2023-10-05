@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -14,16 +14,42 @@
       <baby-video slot="media"></baby-video>
       <media-loading-indicator
         slot="centered-chrome"
-        no-auto-hide
+        noautohide
       ></media-loading-indicator>
       <media-control-bar>
         <media-play-button></media-play-button>
-        <media-time-display show-duration></media-time-display>
+        <media-mute-button></media-mute-button>
+        <media-volume-range></media-volume-range>
+        <media-time-display showduration></media-time-display>
         <media-time-range></media-time-range>
+        <media-playback-rate-button rates="-1 1"></media-playback-rate-button>
         <media-fullscreen-button></media-fullscreen-button>
       </media-control-bar>
     </media-controller>
-    
-    <p><a href="https://github.com/MattiasBuelens/baby-video">Source code on GitHub</a></p>
+
+    <p>
+      <a href="https://github.com/MattiasBuelens/baby-video"
+        >Source code on GitHub</a
+      >
+    </p>
+
+    <style>
+      media-mute-button + media-volume-range {
+        width: 0;
+        overflow: hidden;
+        padding-left: 0;
+        padding-right: 0;
+
+        /* Set the internal width so it reveals, not grows */
+        --media-range-track-width: 70px;
+        transition: width 0.2s ease-in;
+      }
+
+      /* Expand volume control when hovered or focused */
+      media-mute-button:is(:hover, :focus, :focus-within) + media-volume-range,
+      media-mute-button + media-volume-range:is(:hover, :focus, :focus-within) {
+        width: var(--media-range-track-width);
+      }
+    </style>
   </body>
 </html>
