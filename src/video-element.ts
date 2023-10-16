@@ -1082,9 +1082,6 @@ export class BabyVideoElement extends HTMLElement {
         break;
       }
     }
-    if (direction === Direction.BACKWARD) {
-      frames.reverse();
-    }
     this.#audioContext ??= this.#initializeAudio(firstFrame.sampleRate);
     this.#renderAudioFrame(frames, currentTimeInMicros, direction);
     // Decode more frames (if we now have more space in the queue)
@@ -1098,17 +1095,19 @@ export class BabyVideoElement extends HTMLElement {
   ) {
     const firstFrame = frames[0];
     const lastFrame = frames[frames.length - 1];
-    let firstTimestamp = firstFrame.timestamp;
-    let lastTimestamp = lastFrame.timestamp + lastFrame.duration;
-    if (direction === Direction.BACKWARD) {
-      [firstTimestamp, lastTimestamp] = [lastTimestamp, firstTimestamp];
-    }
+    const firstTimestamp = firstFrame.timestamp;
+    const lastTimestamp = lastFrame.timestamp + lastFrame.duration;
     if (DEBUG) {
       console.log(
         `render audio frames start=${firstTimestamp} end=${lastTimestamp} duration=${
           lastTimestamp - firstTimestamp
         } count=${frames.length}`
       );
+    }
+    // For reverse playback, first put the frames back in their original order,
+    // so we can reverse the individual samples later.
+    if (direction === Direction.BACKWARD) {
+      frames.reverse();
     }
     // Create an AudioBuffer containing all frame data
     const { numberOfChannels, sampleRate } = frames[0];
