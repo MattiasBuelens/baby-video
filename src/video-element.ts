@@ -662,7 +662,7 @@ export class BabyVideoElement extends HTMLElement {
       if (frameAtTime === undefined) {
         return;
       }
-      this.#processDecodeQueue(
+      this.#processVideoDecodeQueue(
         videoTrackBuffer.getDecodeDependenciesForFrame(frameAtTime),
         direction
       );
@@ -681,11 +681,11 @@ export class BabyVideoElement extends HTMLElement {
       if (nextQueue === undefined) {
         break;
       }
-      this.#processDecodeQueue(nextQueue, direction);
+      this.#processVideoDecodeQueue(nextQueue, direction);
     }
   }
 
-  #processDecodeQueue(
+  #processVideoDecodeQueue(
     decodeQueue: VideoDecodeQueue,
     direction: Direction
   ): void {
