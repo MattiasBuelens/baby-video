@@ -32,6 +32,10 @@ export function arrayRemoveAt<T>(array: T[], index: number): void {
   }
 }
 
+export function sumWith<T>(array: T[], cb: (element: T) => number): number {
+  return array.reduce((total, element) => total + cb(element), 0);
+}
+
 export function queueTask(fn: () => void): void {
   setTimeout(fn, 0);
 }

@@ -14,6 +14,7 @@ import {
   Deferred,
   Direction,
   queueTask,
+  sumWith,
   waitForEvent
 } from "./util";
 import { TimeRange, TimeRanges } from "./time-ranges";
@@ -1113,10 +1114,7 @@ export class BabyVideoElement extends HTMLElement {
     const { numberOfChannels, sampleRate } = frames[0];
     const audioBuffer = new AudioBuffer({
       numberOfChannels,
-      length: frames.reduce(
-        (totalFrames, frame) => totalFrames + frame.numberOfFrames,
-        0
-      ),
+      length: sumWith(frames, (frame) => frame.numberOfFrames),
       sampleRate
     });
     for (let channel = 0; channel < numberOfChannels; channel++) {
