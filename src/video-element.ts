@@ -53,6 +53,9 @@ const decodeQueueHwm = 30;
 
 const DEBUG = false;
 
+// Bug showcases
+const BUG_DECODE_VIDEO_IN_REVERSE = false;
+
 export class BabyVideoElement extends HTMLElement {
   readonly #canvas: HTMLCanvasElement;
   readonly #canvasContext: CanvasRenderingContext2D;
@@ -89,6 +92,7 @@ export class BabyVideoElement extends HTMLElement {
   #nextDecodedVideoFramePromise: Deferred<void> | undefined = undefined;
   #lastRenderedFrame: number | undefined = undefined;
   #nextRenderFrame: number = 0;
+  #needKeyFrame: boolean = true;
 
   readonly #audioDecoder: AudioDecoder;
   #lastAudioDecoderConfig: AudioDecoderConfig | undefined = undefined;
@@ -711,17 +715,29 @@ export class BabyVideoElement extends HTMLElement {
     ) {
       this.#videoDecoder.configure(codecConfig);
       this.#lastVideoDecoderConfig = codecConfig;
+      this.#needKeyFrame = true;
+    }
+    if (direction === Direction.BACKWARD && BUG_DECODE_VIDEO_IN_REVERSE) {
+      frames.reverse();
     }
     for (const frame of frames) {
+      if (this.#needKeyFrame) {
+        if (frame.type === "key") {
+          this.#needKeyFrame = false;
+        } else {
+          // Drop non-keyframe
+          continue;
+        }
+      }
       this.#videoDecoder.decode(frame);
       this.#decodingVideoFrames.push(frame);
     }
     // The "furthest decoded frame" depends on the rendering order,
     // since we must decode the frames in their original order.
-    if (direction == Direction.FORWARD) {
-      this.#furthestDecodingVideoFrame = frames[frames.length - 1];
-    } else {
+    if (direction === Direction.BACKWARD && !BUG_DECODE_VIDEO_IN_REVERSE) {
       this.#furthestDecodingVideoFrame = frames[0];
+    } else {
+      this.#furthestDecodingVideoFrame = frames[frames.length - 1];
     }
   }
 
@@ -847,6 +863,7 @@ export class BabyVideoElement extends HTMLElement {
     this.#lastRenderedFrame = undefined;
     this.#decodingVideoFrames.length = 0;
     this.#decodedVideoFrames.length = 0;
+    this.#needKeyFrame = true;
     this.#videoDecoder.reset();
   }
 
