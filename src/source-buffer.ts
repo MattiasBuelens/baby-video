@@ -713,7 +713,7 @@ export class BabySourceBuffer extends EventTarget {
       //      and HTMLMediaElement.readyState is greater than HAVE_METADATA,
       //      then set the HTMLMediaElement.readyState attribute to HAVE_METADATA and stall playback.
       if (
-        currentTimeInMicros >= start &&
+        currentTimeInMicros >= startInMicros &&
         currentTimeInMicros < removeEndTimestamp &&
         mediaElement.readyState > MediaReadyState.HAVE_METADATA
       ) {
