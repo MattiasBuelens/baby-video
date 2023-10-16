@@ -1102,14 +1102,10 @@ export class BabyVideoElement extends HTMLElement {
     }
     const firstFrame = frames[0];
     const lastFrame = frames[frames.length - 1];
-    let firstTimestamp: number;
-    let lastTimestamp: number;
+    let firstTimestamp = firstFrame.timestamp;
+    let lastTimestamp = lastFrame.timestamp + lastFrame.duration;
     if (direction === Direction.BACKWARD) {
-      firstTimestamp = lastFrame.timestamp + lastFrame.duration;
-      lastTimestamp = firstFrame.timestamp;
-    } else {
-      firstTimestamp = firstFrame.timestamp;
-      lastTimestamp = lastFrame.timestamp + lastFrame.duration;
+      [firstTimestamp, lastTimestamp] = [lastTimestamp, firstTimestamp];
     }
     // Create an AudioBuffer containing all frame data
     const { numberOfChannels, sampleRate } = frames[0];
