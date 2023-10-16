@@ -50,6 +50,8 @@ export let notifyEndOfStream: (videoElement: BabyVideoElement) => void;
 const decodeQueueLwm = 20;
 const decodeQueueHwm = 30;
 
+const DEBUG = false;
+
 export class BabyVideoElement extends HTMLElement {
   readonly #canvas: HTMLCanvasElement;
   readonly #canvasContext: CanvasRenderingContext2D;
@@ -654,6 +656,13 @@ export class BabyVideoElement extends HTMLElement {
       this.#furthestDecodingVideoFrame !== undefined &&
       !videoTrackBuffer.hasFrame(this.#furthestDecodingVideoFrame)
     ) {
+      if (DEBUG) {
+        console.warn(
+          `last decoded video frame was removed (timestamp=${
+            this.#furthestDecodingVideoFrame.timestamp
+          }), decoding from current time`
+        );
+      }
       this.#furthestDecodingVideoFrame = undefined;
     }
     // Decode frames for current time
@@ -690,6 +699,11 @@ export class BabyVideoElement extends HTMLElement {
     direction: Direction
   ): void {
     const { frames, codecConfig } = decodeQueue;
+    if (DEBUG) {
+      console.log(
+        `decode video frames: timestamp=${frames[0].timestamp} count=${frames.length}`
+      );
+    }
     if (
       this.#videoDecoder.state === "unconfigured" ||
       this.#lastVideoDecoderConfig !== codecConfig
@@ -716,6 +730,11 @@ export class BabyVideoElement extends HTMLElement {
     );
     if (decodingFrameIndex < 0) {
       // Drop frames that are no longer in the decode queue.
+      if (DEBUG) {
+        console.log(
+          `dropping decoded video frame at timestamp=${frame.timestamp}, no longer in queue`
+        );
+      }
       frame.close();
       return;
     }
@@ -726,10 +745,20 @@ export class BabyVideoElement extends HTMLElement {
     const direction =
       this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
     if (isFrameBeyondTime(decodingFrame, direction, currentTimeInMicros)) {
+      if (DEBUG) {
+        console.log(
+          `dropping decoded video frame at timestamp=${decodingFrame.timestamp}, beyond currentTime=${currentTimeInMicros}us`
+        );
+      }
       frame.close();
       // Decode more frames (if we now have more space in the queue)
       this.#decodeVideoFrames();
       return;
+    }
+    if (DEBUG) {
+      console.log(
+        `decoded video frame at timestamp=${decodingFrame.timestamp}`
+      );
     }
     // Note: Chrome does not yet copy EncodedVideoChunk.duration to VideoFrame.duration
     const bitmap = await createImageBitmap(
@@ -789,6 +818,9 @@ export class BabyVideoElement extends HTMLElement {
     }
     const frame = this.#decodedVideoFrames[currentFrameIndex];
     if (this.#lastRenderedFrame !== frame.timestamp) {
+      if (DEBUG) {
+        console.log(`render video frame timestamp=${frame.timestamp}`);
+      }
       this.#updateSize(frame.displayWidth, frame.displayHeight);
       this.#canvasContext.drawImage(
         frame,
@@ -834,6 +866,13 @@ export class BabyVideoElement extends HTMLElement {
       this.#furthestDecodedAudioFrame !== undefined &&
       !audioTrackBuffer.hasFrame(this.#furthestDecodedAudioFrame)
     ) {
+      if (DEBUG) {
+        console.warn(
+          `last decoded audio frame was removed (timestamp=${
+            this.#furthestDecodedAudioFrame.timestamp
+          }), decoding from current time`
+        );
+      }
       this.#furthestDecodedAudioFrame = undefined;
     }
     // Decode audio for current time
@@ -870,6 +909,11 @@ export class BabyVideoElement extends HTMLElement {
     direction: Direction
   ): void {
     const { frames, codecConfig } = decodeQueue;
+    if (DEBUG) {
+      console.log(
+        `decode audio frames: timestamp=${frames[0].timestamp} count=${frames.length}`
+      );
+    }
     if (
       this.#audioDecoder.state === "unconfigured" ||
       this.#lastAudioDecoderConfig !== codecConfig
@@ -909,6 +953,11 @@ export class BabyVideoElement extends HTMLElement {
     );
     if (decodingFrameIndex < 0) {
       // Drop frames that are no longer in the decode queue.
+      if (DEBUG) {
+        console.log(
+          `dropping decoded audio frame at timestamp=${frame.timestamp}, no longer in queue`
+        );
+      }
       frame.close();
       return;
     }
@@ -925,10 +974,18 @@ export class BabyVideoElement extends HTMLElement {
     const direction =
       this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
     if (isFrameBeyondTime(decodedFrame, direction, currentTimeInMicros)) {
+      if (DEBUG) {
+        console.log(
+          `dropping decoded audio frame at timestamp=${decodedFrame.timestamp}, beyond currentTime=${currentTimeInMicros}us`
+        );
+      }
       decodedFrame.close();
       // Decode more frames (if we now have more space in the queue)
       this.#decodeAudio();
       return;
+    }
+    if (DEBUG) {
+      console.log(`decoded audio frame at timestamp=${decodedFrame.timestamp}`);
     }
     this.#decodedAudioFrames.push(decodedFrame);
     if (this.#nextDecodedAudioFramePromise) {
@@ -1038,6 +1095,11 @@ export class BabyVideoElement extends HTMLElement {
     currentTimeInMicros: number,
     direction: Direction
   ) {
+    if (DEBUG) {
+      console.log(
+        `render audio frames timestamp=${frames[0].timestamp} count=${frames.length}`
+      );
+    }
     const firstFrame = frames[0];
     const lastFrame = frames[frames.length - 1];
     let firstTimestamp: number;
