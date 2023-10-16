@@ -124,7 +124,7 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
   }
 
   findFrameForTime(time: number): EncodedAudioChunk | undefined {
-    const timeInMicros = time * 1e6;
+    const timeInMicros = Math.floor(time * 1e6);
     return this.#frames.find(
       (frame) =>
         frame.timestamp <= timeInMicros &&
@@ -266,7 +266,7 @@ export class VideoTrackBuffer extends TrackBuffer<EncodedVideoChunk> {
   }
 
   findFrameForTime(time: number): EncodedVideoChunk | undefined {
-    const timeInMicros = time * 1e6;
+    const timeInMicros = Math.floor(time * 1e6);
     const containingGop = this.#gops.find((gop) => {
       return gop.start <= timeInMicros && timeInMicros < gop.end;
     });

@@ -572,7 +572,7 @@ export class BabyVideoElement extends HTMLElement {
     //     is available, and, if it is, until it has decoded enough data to play back that position.
     this.#seekAbortController = new AbortController();
     this.#waitForSeekToComplete(
-      1e6 * newPosition,
+      Math.floor(1e6 * newPosition),
       this.#seekAbortController.signal
     ).catch(() => {});
   }
@@ -741,7 +741,7 @@ export class BabyVideoElement extends HTMLElement {
     const decodingFrame = this.#decodingVideoFrames[decodingFrameIndex];
     arrayRemoveAt(this.#decodingVideoFrames, decodingFrameIndex);
     // Drop frames that are beyond current time, since we're too late to render them.
-    const currentTimeInMicros = 1e6 * this.#currentTime;
+    const currentTimeInMicros = Math.floor(1e6 * this.#currentTime);
     const direction =
       this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
     if (isFrameBeyondTime(decodingFrame, direction, currentTimeInMicros)) {
@@ -793,7 +793,7 @@ export class BabyVideoElement extends HTMLElement {
 
   #renderVideoFrame(): void {
     this.#nextRenderFrame = 0;
-    const currentTimeInMicros = 1e6 * this.#currentTime;
+    const currentTimeInMicros = Math.floor(1e6 * this.#currentTime);
     const direction =
       this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
     // Drop all frames that are before current time, since we're too late to render them.
@@ -970,7 +970,7 @@ export class BabyVideoElement extends HTMLElement {
     );
     frame.close();
     // Drop frames that are beyond current time, since we're too late to render them.
-    const currentTimeInMicros = 1e6 * this.#currentTime;
+    const currentTimeInMicros = Math.floor(1e6 * this.#currentTime);
     const direction =
       this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
     if (isFrameBeyondTime(decodedFrame, direction, currentTimeInMicros)) {
@@ -1016,7 +1016,7 @@ export class BabyVideoElement extends HTMLElement {
   }
 
   #renderAudio() {
-    const currentTimeInMicros = 1e6 * this.#currentTime;
+    const currentTimeInMicros = Math.floor(1e6 * this.#currentTime);
     const direction =
       this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
     // Drop all frames that are before current time, since we're too late to render them.
@@ -1179,7 +1179,7 @@ export class BabyVideoElement extends HTMLElement {
 
   #updateAudioPlaybackRate() {
     // Re-schedule all audio nodes with the new playback rate.
-    const currentTimeInMicros = 1e6 * this.#currentTime;
+    const currentTimeInMicros = Math.floor(1e6 * this.#currentTime);
     const playbackRate = this.#playbackRate;
     for (const entry of this.#scheduledAudioSourceNodes.slice()) {
       entry.node.stop();

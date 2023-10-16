@@ -629,14 +629,17 @@ export class BabySourceBuffer extends EventTarget {
         // * If highest end timestamp for track buffer is not set:
         //   Remove all coded frames from track buffer that have a presentation timestamp
         //   greater than or equal to presentation timestamp and less than frame end timestamp.
-        trackBuffer.removeSamples(1e6 * pts, 1e6 * frameEndTimestamp);
+        trackBuffer.removeSamples(
+          Math.floor(1e6 * pts),
+          Math.floor(1e6 * frameEndTimestamp)
+        );
       } else if (trackBuffer.highestEndTimestamp <= pts) {
         // * If highest end timestamp for track buffer is set and less than or equal to presentation timestamp:
         //   Remove all coded frames from track buffer that have a presentation timestamp
         //   greater than or equal to highest end timestamp and less than frame end timestamp.
         trackBuffer.removeSamples(
-          1e6 * trackBuffer.highestEndTimestamp,
-          1e6 * frameEndTimestamp
+          Math.floor(1e6 * trackBuffer.highestEndTimestamp),
+          Math.floor(1e6 * frameEndTimestamp)
         );
       }
       // 15. Remove all possible decoding dependencies on the coded frames removed in the previous two steps
@@ -675,14 +678,14 @@ export class BabySourceBuffer extends EventTarget {
 
   #codedFrameRemoval(start: number, end: number): void {
     // https://w3c.github.io/media-source/#dfn-coded-frame-removal
-    const startInMicros = 1e6 * start;
-    const endInMicros = 1e6 * end;
+    const startInMicros = Math.floor(1e6 * start);
+    const endInMicros = Math.floor(1e6 * end);
     const mediaElement = getMediaElement(this.#parent)!;
-    const currentTimeInMicros = 1e6 * mediaElement.currentTime;
+    const currentTimeInMicros = Math.floor(1e6 * mediaElement.currentTime);
     // 3. For each track buffer in this SourceBuffer, run the following steps:
     for (const trackBuffer of this.#trackBuffers) {
       // 3.1. Let remove end timestamp be the current value of duration.
-      let removeEndTimestamp = 1e6 * this.#parent.duration;
+      let removeEndTimestamp = Math.floor(1e6 * this.#parent.duration);
       // 3.2. If this track buffer has a random access point timestamp
       //      that is greater than or equal to end, then update remove end timestamp
       //      to that random access point timestamp.
