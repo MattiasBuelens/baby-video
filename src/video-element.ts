@@ -1095,17 +1095,19 @@ export class BabyVideoElement extends HTMLElement {
     currentTimeInMicros: number,
     direction: Direction
   ) {
-    if (DEBUG) {
-      console.log(
-        `render audio frames timestamp=${frames[0].timestamp} count=${frames.length}`
-      );
-    }
     const firstFrame = frames[0];
     const lastFrame = frames[frames.length - 1];
     let firstTimestamp = firstFrame.timestamp;
     let lastTimestamp = lastFrame.timestamp + lastFrame.duration;
     if (direction === Direction.BACKWARD) {
       [firstTimestamp, lastTimestamp] = [lastTimestamp, firstTimestamp];
+    }
+    if (DEBUG) {
+      console.log(
+        `render audio frames start=${firstTimestamp} end=${lastTimestamp} duration=${
+          lastTimestamp - firstTimestamp
+        } count=${frames.length}`
+      );
     }
     // Create an AudioBuffer containing all frame data
     const { numberOfChannels, sampleRate } = frames[0];
