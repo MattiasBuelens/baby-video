@@ -147,6 +147,9 @@ export class BabyVideoElement extends HTMLElement {
     // before the element upgraded.
     // https://web.dev/custom-elements-best-practices/
     this.#upgradeProperty("srcObject");
+    this.#upgradeProperty("muted");
+    this.#upgradeProperty("playbackRate");
+    this.#upgradeProperty("volume");
     this.#upgradeProperty("currentTime");
   }
 
