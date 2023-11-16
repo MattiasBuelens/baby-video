@@ -51,7 +51,7 @@ export let notifyEndOfStream: (videoElement: BabyVideoElement) => void;
 const decodeQueueLwm = 20;
 const decodeQueueHwm = 30;
 
-const DEBUG = false;
+const DEBUG = true;
 
 // Bug showcases
 const BUG_DECODE_VIDEO_IN_REVERSE = false;

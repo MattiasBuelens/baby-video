@@ -1,6 +1,14 @@
 export type TimeRange = readonly [number, number];
 
-export class TimeRanges {
+export interface TimeRangeLike {
+  readonly length: number;
+
+  start(index: number): number;
+
+  end(index: number): number;
+}
+
+export class TimeRanges implements TimeRangeLike {
   readonly #ranges: ReadonlyArray<TimeRange>;
 
   constructor(ranges: ReadonlyArray<TimeRange>) {
@@ -155,6 +163,23 @@ export class TimeRanges {
 
   subtract(other: TimeRanges): TimeRanges {
     return this.intersect(other.invert());
+  }
+
+  reverse(duration: number): TimeRanges {
+    return new TimeRanges(
+      this.#ranges
+        .map(([start, end]): TimeRange => [duration - end, duration - start])
+        .reverse()
+    );
+  }
+
+  static from(timeRangeLike: TimeRangeLike) {
+    return new TimeRanges(
+      Array.from({ length: timeRangeLike.length }, (_, i) => [
+        timeRangeLike.start(i),
+        timeRangeLike.end(i)
+      ])
+    );
   }
 }
 
