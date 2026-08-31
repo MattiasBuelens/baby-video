@@ -9,7 +9,6 @@ import {
   getBuffered
 } from "./media-source";
 import {
-  arrayRemove,
   arrayRemoveAt,
   Deferred,
   Direction,
@@ -23,6 +22,11 @@ import {
   EncodedChunk,
   VideoDecodeQueue
 } from "./track-buffer";
+import { BabyAudioSink } from "./audio-sink";
+import type {
+  AudioSinkDirection,
+  AudioSinkStatusMessage
+} from "./audio-sink-messages";
 
 const template = document.createElement("template");
 template.innerHTML = `<style>${stylesheet}</style>`;
@@ -51,10 +55,37 @@ export let notifyEndOfStream: (videoElement: BabyVideoElement) => void;
 const decodeQueueLwm = 20;
 const decodeQueueHwm = 30;
 
+// Low and high watermark for the audio sink, in seconds of buffered audio.
+// Unlike video, audio is buffered by duration rather than by frame count:
+// an HE-AAC frame holds 2048 samples where a plain AAC frame holds 1024,
+// so a frame count would mean wildly different amounts of audio.
+const audioBufferLwm = 1;
+const audioBufferHwm = 2;
+
+// Maximum number of decoded audio frames to hold on to
+// while the audio worklet module is still loading.
+const maxPendingAudioFrames = 200;
+
 const DEBUG = false;
 
 // Bug showcases
 const BUG_DECODE_VIDEO_IN_REVERSE = false;
+
+// A decoded audio frame, with the timestamp and duration of the encoded chunk
+// it was decoded from. The decoder does not preserve those itself, see
+// #processAudioDecodeQueue().
+interface DecodedAudioFrame {
+  readonly frame: AudioData;
+  readonly timestamp: number;
+  readonly duration: number;
+}
+
+// A chunk of audio that was pushed to the audio sink.
+interface PushedAudioChunk {
+  readonly timestamp: number;
+  readonly duration: number;
+  readonly sequence: number;
+}
 
 export class BabyVideoElement extends HTMLElement {
   readonly #canvas: HTMLCanvasElement;
@@ -75,7 +106,6 @@ export class BabyVideoElement extends HTMLElement {
   #pendingPlayPromises: Array<Deferred<void>> = [];
   #advanceLoop: number = 0;
   #lastAdvanceTime: number = 0;
-  #lastAudioTimestamp: number = 0;
   #lastPlayedTime: number = NaN;
   #lastTimeUpdate: number = 0;
   #lastProgress: number = 0;
@@ -102,15 +132,13 @@ export class BabyVideoElement extends HTMLElement {
   #nextDecodedAudioFramePromise: Deferred<void> | undefined = undefined;
   #originalDecodingAudioFrames: WeakMap<EncodedAudioChunk, EncodedAudioChunk> =
     new WeakMap();
-  #decodedAudioFrames: AudioData[] = [];
 
-  #audioContext: AudioContext | undefined;
-  #lastScheduledAudioFrameTime: number = -1;
-  #scheduledAudioSourceNodes: Array<{
-    node: AudioBufferSourceNode;
-    timestamp: number;
-  }> = [];
-  #volumeGainNode: GainNode | undefined;
+  #audioSink: BabyAudioSink | undefined;
+  // Audio that was handed to the sink but not consumed by it yet, in push order.
+  // Doubles as the record of which audio is available for seek completion.
+  #pushedAudioChunks: PushedAudioChunk[] = [];
+  // Audio that was decoded while the audio worklet module was still loading.
+  #pendingAudioFrames: DecodedAudioFrame[] = [];
 
   constructor() {
     super();
@@ -217,13 +245,13 @@ export class BabyVideoElement extends HTMLElement {
     const currentTime = this.#getCurrentPlaybackPosition(performance.now());
     if (Math.sign(value) !== Math.sign(this.#playbackRate)) {
       this.#resetVideoDecoder();
-      this.#resetAudioDecoder();
+      this.#resetAudioDecoder(currentTime);
     }
     this.#playbackRate = value;
     this.#updateCurrentTime(currentTime);
     this.#updatePlaying();
     this.#updatePlayed();
-    this.#updateAudioPlaybackRate();
+    this.#audioSink?.setPlaybackRate(value);
     this.dispatchEvent(new Event("ratechange"));
   }
 
@@ -261,8 +289,10 @@ export class BabyVideoElement extends HTMLElement {
     this.#readyState = MediaReadyState.HAVE_NOTHING;
     this.#seeking = false;
     this.#seekAbortController.abort();
+    this.#resetAudioDecoder(0);
+    this.#audioSink?.close();
+    this.#audioSink = undefined;
     this.#lastAdvanceTime = 0;
-    this.#lastAudioTimestamp = 0;
     this.#lastProgress = 0;
     this.#lastPlayedTime = NaN;
     clearTimeout(this.#nextProgressTimer);
@@ -416,16 +446,15 @@ export class BabyVideoElement extends HTMLElement {
 
   #updatePlaying(): void {
     if (this.#isPotentiallyPlaying() && !this.#seeking) {
-      void this.#audioContext?.resume();
+      this.#audioSink?.resume();
       if (this.#advanceLoop === 0) {
         this.#lastAdvanceTime = performance.now();
-        this.#lastAudioTimestamp = this.#audioContext?.currentTime ?? 0;
         this.#advanceLoop = requestAnimationFrame((now) => {
           this.#advanceCurrentTime(now);
         });
       }
     } else if (this.#advanceLoop !== 0) {
-      void this.#audioContext?.suspend();
+      this.#audioSink?.suspend();
       cancelAnimationFrame(this.#advanceLoop);
       this.#advanceLoop = 0;
     }
@@ -436,18 +465,25 @@ export class BabyVideoElement extends HTMLElement {
     // its current playback position must increase monotonically at the element's playbackRate units
     // of media time per unit time of the media timeline's clock.
     if (this.#isPotentiallyPlaying() && !this.#seeking) {
-      let elapsedTime: number;
       // Use audio clock as sync, otherwise use wall-clock time.
-      if (
-        this.#audioContext !== undefined &&
-        this.#audioContext.state === "running"
-      ) {
-        elapsedTime = this.#audioContext.currentTime - this.#lastAudioTimestamp;
+      // The audio sink reports an anchor { mediaTime, contextTime, effectiveRate }
+      // from the audio worklet, which we extrapolate with AudioContext.currentTime.
+      // That extrapolation is exact for as long as the effective rate stays
+      // constant, and the effective rate is 0 whenever the worklet is starved or
+      // stopped, so the clock stalls rather than running away.
+      let newTime = this.#audioSink?.getPosition();
+      if (newTime === undefined) {
+        // There's no audio track, or no audio clock to sync with (yet).
+        const elapsedTime = Math.max(0, (now - this.#lastAdvanceTime) / 1000);
+        newTime = this.#currentTime + this.#playbackRate * elapsedTime;
+      } else if (this.#playbackRate >= 0) {
+        // Unlike the wall clock, the audio clock is absolute rather than
+        // incremental, so it must be kept from moving against the direction of
+        // playback, e.g. while AudioContext.resume() is still pending.
+        newTime = Math.max(this.#currentTime, newTime);
       } else {
-        elapsedTime = (now - this.#lastAdvanceTime) / 1000;
+        newTime = Math.min(this.#currentTime, newTime);
       }
-      const newTime =
-        this.#currentTime + this.#playbackRate * Math.max(0, elapsedTime);
       // Do not advance outside the current buffered range.
       const currentRange = this.buffered.find(this.#currentTime);
       if (currentRange !== undefined) {
@@ -521,9 +557,7 @@ export class BabyVideoElement extends HTMLElement {
   #advanceCurrentTime(now: number): void {
     this.#updateCurrentTime(this.#getCurrentPlaybackPosition(now));
     this.#renderVideoFrame();
-    this.#renderAudio();
     this.#lastAdvanceTime = now;
-    this.#lastAudioTimestamp = this.#audioContext?.currentTime ?? 0;
     this.#timeMarchesOn(true, now);
     if (this.#isPotentiallyPlaying() && !this.#seeking) {
       this.#advanceLoop = requestAnimationFrame((now) =>
@@ -573,7 +607,7 @@ export class BabyVideoElement extends HTMLElement {
     queueTask(() => this.dispatchEvent(new Event("seeking")));
     // 11. Set the current playback position to the new playback position.
     this.#resetVideoDecoder();
-    this.#resetAudioDecoder();
+    this.#resetAudioDecoder(newPosition);
     this.#updateCurrentTime(newPosition);
     this.#updatePlaying();
     // 12. Wait until the user agent has established whether or not the media data for the new playback position
@@ -621,15 +655,20 @@ export class BabyVideoElement extends HTMLElement {
   }
 
   #hasDecodedAudioFrameAtTime(timeInMicros: number): boolean {
-    return this.#hasDecodedFrameAtTime(this.#decodedAudioFrames, timeInMicros);
+    // Decoded audio is handed to the sink immediately, so we have to look at
+    // what we pushed to it rather than at a queue of decoded frames.
+    return (
+      this.#hasDecodedFrameAtTime(this.#pendingAudioFrames, timeInMicros) ||
+      this.#hasDecodedFrameAtTime(this.#pushedAudioChunks, timeInMicros)
+    );
   }
 
   #hasDecodedFrameAtTime(
-    frames: ReadonlyArray<VideoFrame | AudioData>,
+    frames: ReadonlyArray<{ timestamp: number; duration: number | null }>,
     timeInMicros: number
   ): boolean {
     return frames.some(
-      (frame: VideoFrame | AudioData) =>
+      (frame) =>
         frame.timestamp <= timeInMicros &&
         timeInMicros < frame.timestamp + frame.duration!
     );
@@ -908,21 +947,39 @@ export class BabyVideoElement extends HTMLElement {
       );
     }
     // Decode next frames in advance
-    while (
-      this.#decodingAudioFrames.length + this.#decodedAudioFrames.length <
-      decodeQueueLwm
-    ) {
+    let bufferedAhead = this.#audioBufferedAhead();
+    while (bufferedAhead < audioBufferLwm) {
+      const lastFrame = this.#furthestDecodedAudioFrame!;
+      const frameDuration = (lastFrame.duration ?? 0) / 1e6;
+      const frameCount =
+        frameDuration > 0
+          ? Math.ceil((audioBufferHwm - bufferedAhead) / frameDuration)
+          : decodeQueueHwm;
       const nextQueue = audioTrackBuffer.getNextFrames(
-        this.#furthestDecodedAudioFrame!,
-        decodeQueueHwm -
-          (this.#decodingAudioFrames.length + this.#decodedAudioFrames.length),
+        lastFrame,
+        Math.max(1, frameCount),
         direction
       );
       if (nextQueue === undefined) {
         break;
       }
       this.#processAudioDecodeQueue(nextQueue, direction);
+      bufferedAhead = this.#audioBufferedAhead();
     }
+  }
+
+  // The amount of audio we've already decoded or are decoding, in seconds.
+  #audioBufferedAhead(): number {
+    const pushed = sumWith(this.#pushedAudioChunks, (chunk) => chunk.duration);
+    const pending = sumWith(
+      this.#pendingAudioFrames,
+      (frame) => frame.duration
+    );
+    const decoding = sumWith(
+      this.#decodingAudioFrames,
+      (chunk) => chunk.duration!
+    );
+    return (pushed + pending + decoding) / 1e6;
   }
 
   #processAudioDecodeQueue(
@@ -984,12 +1041,13 @@ export class BabyVideoElement extends HTMLElement {
     }
     const decodingFrame = this.#decodingAudioFrames[decodingFrameIndex];
     arrayRemoveAt(this.#decodingAudioFrames, decodingFrameIndex);
-    // Restore original timestamp
-    const decodedFrame = cloneAudioData(
+    // Restore the original timestamp, which the decoder did not preserve.
+    const originalFrame = this.#originalDecodingAudioFrames.get(decodingFrame)!;
+    const decodedFrame: DecodedAudioFrame = {
       frame,
-      this.#originalDecodingAudioFrames.get(decodingFrame)!.timestamp
-    );
-    frame.close();
+      timestamp: originalFrame.timestamp,
+      duration: originalFrame.duration!
+    };
     // Drop frames that are beyond current time, since we're too late to render them.
     const currentTimeInMicros = Math.floor(1e6 * this.#currentTime);
     const direction =
@@ -1000,7 +1058,7 @@ export class BabyVideoElement extends HTMLElement {
           `dropping decoded audio frame at timestamp=${decodedFrame.timestamp}, beyond currentTime=${currentTimeInMicros}us`
         );
       }
-      decodedFrame.close();
+      frame.close();
       // Decode more frames (if we now have more space in the queue)
       this.#decodeAudio();
       return;
@@ -1008,7 +1066,7 @@ export class BabyVideoElement extends HTMLElement {
     if (DEBUG) {
       console.log(`decoded audio frame at timestamp=${decodedFrame.timestamp}`);
     }
-    this.#decodedAudioFrames.push(decodedFrame);
+    this.#pushAudioToSink(decodedFrame, direction);
     if (this.#nextDecodedAudioFramePromise) {
       this.#nextDecodedAudioFramePromise.resolve();
       this.#nextDecodedAudioFramePromise = undefined;
@@ -1017,219 +1075,129 @@ export class BabyVideoElement extends HTMLElement {
     this.#decodeAudio();
   }
 
-  #initializeAudio(sampleRate: number): AudioContext {
-    this.#audioContext = new AudioContext({
-      sampleRate: sampleRate,
-      latencyHint: "playback"
-    });
-
-    this.#volumeGainNode = new GainNode(this.#audioContext);
-    this.#volumeGainNode.connect(this.#audioContext.destination);
-    this.#updateVolume();
-
-    if (this.#isPotentiallyPlaying() && !this.#seeking) {
-      void this.#audioContext.resume();
-    } else {
-      void this.#audioContext.suspend();
+  #ensureAudioSink(
+    sampleRate: number,
+    numberOfChannels: number
+  ): BabyAudioSink {
+    if (this.#audioSink === undefined) {
+      // The audio context must run at the same sample rate as the decoded audio,
+      // which is not necessarily the sample rate from the decoder config:
+      // with HE-AAC, the decoder outputs twice the declared sample rate.
+      this.#audioSink = new BabyAudioSink({
+        sampleRate,
+        numberOfChannels,
+        onStatus: (status) => this.#onAudioSinkStatus(status),
+        onReady: () => this.#flushPendingAudioFrames(),
+        onStateChange: (state) => this.#onAudioContextStateChange(state)
+      });
+      this.#audioSink.setPlaybackRate(this.#playbackRate);
+      this.#updateVolume();
+      if (this.#isPotentiallyPlaying() && !this.#seeking) {
+        this.#audioSink.resume();
+      } else {
+        this.#audioSink.suspend();
+      }
     }
-
-    return this.#audioContext;
+    return this.#audioSink;
   }
 
-  #renderAudio() {
-    const currentTimeInMicros = Math.floor(1e6 * this.#currentTime);
-    const direction =
-      this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
-    // Drop all frames that are before current time, since we're too late to render them.
-    for (let i = this.#decodedAudioFrames.length - 1; i >= 0; i--) {
-      const frame = this.#decodedAudioFrames[i];
-      if (isFrameBeyondTime(frame, direction, currentTimeInMicros)) {
-        frame.close();
-        arrayRemoveAt(this.#decodedAudioFrames, i);
+  #pushAudioToSink(
+    decodedFrame: DecodedAudioFrame,
+    direction: Direction
+  ): void {
+    const { frame, timestamp, duration } = decodedFrame;
+    const sink = this.#ensureAudioSink(
+      frame.sampleRate,
+      frame.numberOfChannels
+    );
+    if (!sink.isReady) {
+      // The audio worklet module is still loading. Hold on to the frame,
+      // it will be pushed as soon as the sink is ready.
+      if (this.#pendingAudioFrames.length >= maxPendingAudioFrames) {
+        this.#pendingAudioFrames.shift()!.frame.close();
       }
-    }
-    // Don't render audio while playback is stopped.
-    if (this.#playbackRate === 0) return;
-    let nextFrameIndex: number = -1;
-    if (this.#lastScheduledAudioFrameTime >= 0) {
-      // Render the next frame.
-      nextFrameIndex = this.#decodedAudioFrames.findIndex((frame) => {
-        if (direction === Direction.BACKWARD) {
-          return (
-            frame.timestamp + frame.duration ===
-            this.#lastScheduledAudioFrameTime
-          );
-        } else {
-          return frame.timestamp === this.#lastScheduledAudioFrameTime;
-        }
-      });
-    }
-    if (nextFrameIndex < 0) {
-      // Render the frame at current time.
-      nextFrameIndex = this.#decodedAudioFrames.findIndex((frame) => {
-        return (
-          frame.timestamp <= currentTimeInMicros &&
-          currentTimeInMicros < frame.timestamp + frame.duration
-        );
-      });
-    }
-    if (nextFrameIndex < 0) {
-      // Decode more frames (if we now have more space in the queue)
-      this.#decodeAudio();
+      this.#pendingAudioFrames.push(decodedFrame);
       return;
     }
-    // Collect as many consecutive audio frames as possible
-    // to schedule in a single batch.
-    const firstFrame = this.#decodedAudioFrames[nextFrameIndex];
-    const frames: AudioData[] = [firstFrame];
-    for (
-      let frameIndex = nextFrameIndex + 1;
-      frameIndex < this.#decodedAudioFrames.length;
-      frameIndex++
-    ) {
-      const frame = this.#decodedAudioFrames[frameIndex];
-      const previousFrame = frames[frames.length - 1];
-      if (
-        isConsecutiveAudioFrame(previousFrame, frame, direction) &&
-        frame.format === firstFrame.format &&
-        frame.numberOfChannels === firstFrame.numberOfChannels &&
-        frame.sampleRate === firstFrame.sampleRate
-      ) {
-        // This frame is consecutive with the previous frame.
-        frames.push(frame);
-      } else {
-        // This frame is not consecutive. We can't schedule this in the same batch.
-        break;
-      }
+    if (DEBUG && frame.numberOfChannels !== sink.numberOfChannels) {
+      console.warn(
+        `audio frame has ${frame.numberOfChannels} channels, but the audio sink has ${sink.numberOfChannels}`
+      );
     }
-    this.#audioContext ??= this.#initializeAudio(firstFrame.sampleRate);
-    this.#renderAudioFrame(frames, currentTimeInMicros, direction);
-    // Decode more frames (if we now have more space in the queue)
+    const sequence = sink.push({
+      // The samples are reversed for reverse playback, so the first sample
+      // is the *end* of the frame.
+      headMediaTime:
+        direction === Direction.BACKWARD ? timestamp + duration : timestamp,
+      direction: direction as AudioSinkDirection,
+      sampleRate: frame.sampleRate,
+      numberOfChannels: frame.numberOfChannels,
+      numberOfFrames: frame.numberOfFrames,
+      samples: copyAudioDataToSamples(frame, direction)
+    });
+    frame.close();
+    this.#pushedAudioChunks.push({ timestamp, duration, sequence });
+  }
+
+  #flushPendingAudioFrames(): void {
+    const frames = this.#pendingAudioFrames.splice(0);
+    const direction =
+      this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
+    for (const frame of frames) {
+      this.#pushAudioToSink(frame, direction);
+    }
+  }
+
+  #onAudioSinkStatus(status: AudioSinkStatusMessage): void {
+    // Forget about the audio that the sink has already played.
+    while (
+      this.#pushedAudioChunks.length > 0 &&
+      this.#pushedAudioChunks[0].sequence <= status.lastConsumedSequence
+    ) {
+      this.#pushedAudioChunks.shift();
+    }
+    if (DEBUG && status.starved) {
+      console.warn(`audio sink is starved at ${status.mediaTime}us`);
+    }
+    // Decode more audio (if the sink now has more space)
     this.#decodeAudio();
   }
 
-  #renderAudioFrame(
-    frames: AudioData[],
-    currentTimeInMicros: number,
-    direction: Direction
-  ) {
-    const firstFrame = frames[0];
-    const lastFrame = frames[frames.length - 1];
-    const firstTimestamp = firstFrame.timestamp;
-    const lastTimestamp = lastFrame.timestamp + lastFrame.duration;
-    if (DEBUG) {
-      console.log(
-        `render audio frames start=${firstTimestamp} end=${lastTimestamp} duration=${
-          lastTimestamp - firstTimestamp
-        } count=${frames.length}`
-      );
+  #onAudioContextStateChange(state: AudioContextState): void {
+    if (state !== "running") {
+      return;
     }
-    // For reverse playback, first put the frames back in their original order,
-    // so we can reverse the individual samples later.
-    if (direction === Direction.BACKWARD) {
-      frames.reverse();
-    }
-    // Create an AudioBuffer containing all frame data
-    const { numberOfChannels, sampleRate } = frames[0];
-    const audioBuffer = new AudioBuffer({
-      numberOfChannels,
-      length: sumWith(frames, (frame) => frame.numberOfFrames),
-      sampleRate
-    });
-    for (let channel = 0; channel < numberOfChannels; channel++) {
-      const options: AudioDataCopyToOptions = {
-        format: "f32-planar",
-        planeIndex: channel
-      };
-      const destination = audioBuffer.getChannelData(channel);
-      let offset = 0;
-      for (const frame of frames) {
-        const size =
-          frame.allocationSize(options) / Float32Array.BYTES_PER_ELEMENT;
-        frame.copyTo(destination.subarray(offset, offset + size), options);
-        offset += size;
-      }
-      if (direction === Direction.BACKWARD) {
-        // For reverse playback, reverse the order of the individual samples.
-        destination.reverse();
-      }
-    }
-    // Schedule an AudioBufferSourceNode to play the AudioBuffer
-    this.#scheduleAudioBuffer(
-      audioBuffer,
-      firstTimestamp,
-      currentTimeInMicros,
-      this.#playbackRate
-    );
-    this.#lastScheduledAudioFrameTime = lastTimestamp;
-    // Close the frames, so the audio decoder can reclaim them.
-    for (let i = frames.length - 1; i >= 0; i--) {
-      const frame = frames[i];
-      frame.close();
-      arrayRemove(this.#decodedAudioFrames, frame);
+    // If the queued audio no longer covers current time, then we've been
+    // running on the wall clock while the audio context was blocked by the
+    // autoplay policy. Start over from current time, so the first audible
+    // sample is in sync with the video.
+    const currentTimeInMicros = Math.floor(1e6 * this.#currentTime);
+    if (
+      this.#pushedAudioChunks.length > 0 &&
+      !this.#hasDecodedAudioFrameAtTime(currentTimeInMicros)
+    ) {
+      this.#resetAudioDecoder(this.#currentTime);
+      this.#decodeAudio();
     }
   }
 
-  #resetAudioDecoder(): void {
-    for (const frame of this.#decodedAudioFrames) {
-      frame.close();
-    }
-    for (const audioSourceNode of this.#scheduledAudioSourceNodes) {
-      audioSourceNode.node.stop();
-    }
+  #resetAudioDecoder(mediaTime: number): void {
     this.#lastAudioDecoderConfig = undefined;
     this.#audioDecoderTimestamp = 0;
     this.#furthestDecodedAudioFrame = undefined;
     this.#decodingAudioFrames.length = 0;
-    this.#decodedAudioFrames.length = 0;
-    this.#scheduledAudioSourceNodes.length = 0;
-    this.#lastScheduledAudioFrameTime = -1;
     this.#audioDecoder.reset();
+    for (const pendingFrame of this.#pendingAudioFrames) {
+      pendingFrame.frame.close();
+    }
+    this.#pendingAudioFrames.length = 0;
+    this.#pushedAudioChunks.length = 0;
+    // Drop all queued audio, and report the new position until it catches up.
+    this.#audioSink?.flush(Math.round(1e6 * mediaTime));
   }
 
   #updateVolume(): void {
-    if (this.#volumeGainNode === undefined) return;
-    this.#volumeGainNode.gain.value = this.#muted ? 0 : this.#volume;
-  }
-
-  #updateAudioPlaybackRate() {
-    // Re-schedule all audio nodes with the new playback rate.
-    const currentTimeInMicros = Math.floor(1e6 * this.#currentTime);
-    const playbackRate = this.#playbackRate;
-    for (const entry of this.#scheduledAudioSourceNodes.slice()) {
-      entry.node.stop();
-      this.#scheduleAudioBuffer(
-        entry.node.buffer!,
-        entry.timestamp,
-        currentTimeInMicros,
-        playbackRate
-      );
-    }
-  }
-
-  #scheduleAudioBuffer(
-    audioBuffer: AudioBuffer,
-    timestamp: number,
-    currentTimeInMicros: number,
-    playbackRate: number
-  ): void {
-    const node = this.#audioContext!.createBufferSource();
-    node.buffer = audioBuffer;
-    node.connect(this.#volumeGainNode!);
-
-    const entry = { node: node, timestamp };
-    this.#scheduledAudioSourceNodes.push(entry);
-    node.addEventListener("ended", () => {
-      arrayRemove(this.#scheduledAudioSourceNodes, entry);
-    });
-
-    const offset = (timestamp - currentTimeInMicros) / (1e6 * playbackRate);
-    node.playbackRate.value = Math.abs(playbackRate);
-    if (offset > 0) {
-      node.start(0, offset);
-    } else {
-      node.start(-offset);
-    }
+    this.#audioSink?.setGain(this.#muted ? 0 : this.#volume);
   }
 
   #isPotentiallyPlaying(): boolean {
@@ -1400,7 +1368,7 @@ export class BabyVideoElement extends HTMLElement {
 customElements.define("baby-video", BabyVideoElement);
 
 function isFrameBeyondTime(
-  frame: EncodedChunk | AudioData | VideoFrame,
+  frame: { timestamp: number; duration: number | null },
   direction: Direction,
   timeInMicros: number
 ): boolean {
@@ -1423,21 +1391,6 @@ function isFrameTimestampEqual(
   return Math.abs(left.timestamp - right.timestamp) <= getFrameTolerance(left);
 }
 
-function isConsecutiveAudioFrame(
-  previous: AudioData,
-  next: AudioData,
-  direction: Direction
-): boolean {
-  let diff: number;
-  if (direction === Direction.BACKWARD) {
-    diff = previous.timestamp - (next.timestamp + next.duration);
-  } else {
-    diff = next.timestamp - (previous.timestamp + previous.duration);
-  }
-  // Due to rounding, there can be a small gap between consecutive audio frames.
-  return Math.abs(diff) <= getFrameTolerance(previous);
-}
-
 function cloneEncodedAudioChunk(
   original: EncodedAudioChunk,
   timestamp: number
@@ -1452,40 +1405,25 @@ function cloneEncodedAudioChunk(
   });
 }
 
-function cloneAudioData(original: AudioData, timestamp: number): AudioData {
+// Copies the samples of an audio frame into a single planar Float32Array,
+// with all channels concatenated.
+function copyAudioDataToSamples(
+  frame: AudioData,
+  direction: Direction
+): Float32Array {
   const format = "f32-planar";
-  let totalSize = 0;
-  for (
-    let channelIndex = 0;
-    channelIndex < original.numberOfChannels;
-    channelIndex++
-  ) {
-    totalSize +=
-      original.allocationSize({ format, planeIndex: channelIndex }) /
-      Float32Array.BYTES_PER_ELEMENT;
+  const { numberOfChannels, numberOfFrames } = frame;
+  const samples = new Float32Array(numberOfChannels * numberOfFrames);
+  for (let channel = 0; channel < numberOfChannels; channel++) {
+    const plane = samples.subarray(
+      channel * numberOfFrames,
+      (channel + 1) * numberOfFrames
+    );
+    frame.copyTo(plane, { format, planeIndex: channel });
+    if (direction === Direction.BACKWARD) {
+      // For reverse playback, reverse the order of the individual samples.
+      plane.reverse();
+    }
   }
-  const buffer = new Float32Array(totalSize);
-  let offset = 0;
-  for (
-    let channelIndex = 0;
-    channelIndex < original.numberOfChannels;
-    channelIndex++
-  ) {
-    const options: AudioDataCopyToOptions = {
-      format,
-      planeIndex: channelIndex
-    };
-    const channelSize =
-      original.allocationSize(options) / Float32Array.BYTES_PER_ELEMENT;
-    original.copyTo(buffer.subarray(offset, offset + totalSize), options);
-    offset += channelSize;
-  }
-  return new AudioData({
-    data: buffer,
-    format,
-    numberOfChannels: original.numberOfChannels,
-    numberOfFrames: original.numberOfFrames,
-    sampleRate: original.sampleRate,
-    timestamp: timestamp
-  });
+  return samples;
 }
