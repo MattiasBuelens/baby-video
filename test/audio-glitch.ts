@@ -6,9 +6,44 @@ import audioUrl from "./fixtures/sine-440.m4a?url";
 import videoUrl from "./fixtures/video.m4v?url";
 
 // Tap every node that connects to an AudioContext's destination,
-// and record what it outputs.
+// and record what it outputs. The recorder runs in an AudioWorklet on the audio
+// thread, so (unlike a ScriptProcessorNode) a busy main thread can't make it
+// drop or duplicate samples.
+const recorderSource = `
+registerProcessor("recorder", class extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.recording = false;
+    this.buffer = new Float32Array(4096);
+    this.length = 0;
+    this.port.onmessage = (event) => {
+      this.recording = event.data;
+      if (!this.recording) this.flush();
+    };
+  }
+  flush() {
+    if (this.length > 0) this.port.postMessage(this.buffer.slice(0, this.length));
+    this.length = 0;
+  }
+  process(inputs) {
+    const input = inputs[0][0];
+    if (this.recording) {
+      // An input without active connections has no channels: record silence.
+      for (let i = 0; i < 128; i++) {
+        this.buffer[this.length++] = input ? input[i] : 0;
+        if (this.length === this.buffer.length) this.flush();
+      }
+    }
+    return true;
+  }
+});
+`;
+const recorderUrl = URL.createObjectURL(
+  new Blob([recorderSource], { type: "text/javascript" })
+);
 const recorded: Float32Array[] = [];
-let recording = false;
+const recorders: AudioWorkletNode[] = [];
+let recordedSampleRate = 48000;
 const originalConnect = AudioNode.prototype.connect as (
   this: AudioNode,
   ...args: any[]
@@ -16,22 +51,29 @@ const originalConnect = AudioNode.prototype.connect as (
 AudioNode.prototype.connect = function (this: AudioNode, ...args: any[]) {
   const destination = args[0];
   if (destination instanceof AudioDestinationNode) {
-    const context = this.context as AudioContext;
-    // ScriptProcessorNode is deprecated, but it can be set up synchronously.
-    const tap = context.createScriptProcessor(4096, 1, 1);
-    tap.onaudioprocess = (event) => {
-      const input = event.inputBuffer.getChannelData(0);
-      event.outputBuffer.getChannelData(0).set(input);
-      if (recording) {
-        recorded.push(input.slice());
-      }
-    };
-    originalConnect.call(this, tap);
-    originalConnect.call(tap, destination);
-    return destination;
+    const source = this;
+    const context = source.context as AudioContext;
+    recordedSampleRate = context.sampleRate;
+    void context.audioWorklet.addModule(recorderUrl).then(() => {
+      const recorder = new AudioWorkletNode(context, "recorder", {
+        numberOfInputs: 1,
+        numberOfOutputs: 0,
+        channelCount: 1,
+        channelCountMode: "explicit"
+      });
+      recorder.port.onmessage = (event) => recorded.push(event.data);
+      originalConnect.call(source, recorder);
+      recorders.push(recorder);
+    });
   }
   return originalConnect.apply(this, args);
 } as typeof AudioNode.prototype.connect;
+
+function setRecording(recording: boolean) {
+  for (const recorder of recorders) {
+    recorder.port.postMessage(recording);
+  }
+}
 
 const video = document.querySelector<BabyVideoElement>("baby-video")!;
 const mediaSource = new BabyMediaSource();
@@ -68,11 +110,13 @@ window.recordPlayback = async ({ start, playbackRate, seconds }) => {
     await waitForEvent(video, "seeked");
   }
   recorded.length = 0;
-  recording = true;
+  setRecording(true);
   await video.play();
   await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
-  recording = false;
+  setRecording(false);
   video.pause();
+  // Wait for the recorder to send its last samples.
+  await new Promise((resolve) => setTimeout(resolve, 100));
   const total = recorded.reduce((sum, chunk) => sum + chunk.length, 0);
   const samples = new Float32Array(total);
   let offset = 0;
@@ -80,6 +124,6 @@ window.recordPlayback = async ({ start, playbackRate, seconds }) => {
     samples.set(chunk, offset);
     offset += chunk.length;
   }
-  return { sampleRate: 48000, samples: Array.from(samples) };
+  return { sampleRate: recordedSampleRate, samples: Array.from(samples) };
 };
 document.body.dataset.ready = "true";
