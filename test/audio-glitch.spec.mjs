@@ -74,14 +74,35 @@ async function main() {
 
   const cases = [
     { name: "forward", start: 1, playbackRate: 1, seconds: 4 },
-    { name: "reverse", start: 8.51, playbackRate: -1, seconds: 4 }
+    { name: "reverse", start: 8.51, playbackRate: -1, seconds: 4 },
+    // Seeking exactly to a frame boundary (of both the 30fps video and the
+    // 1024-sample audio frames at 48kHz: 8 = 250 * 1024 / 48000).
+    {
+      name: "reverse from frame boundary",
+      start: 8,
+      playbackRate: -1,
+      seconds: 2
+    }
   ];
   let failed = false;
   for (const testCase of cases) {
-    const { samples, sampleRate } = await page.evaluate(
-      (options) => window.recordPlayback(options),
-      testCase
-    );
+    const result = await Promise.race([
+      page.evaluate((options) => window.recordPlayback(options), testCase),
+      new Promise((resolve) =>
+        setTimeout(() => resolve(undefined), (testCase.seconds + 10) * 1000)
+      )
+    ]);
+    if (result === undefined) {
+      failed = true;
+      console.log(
+        `FAIL ${testCase.name}: timed out (seek or play never completed)`
+      );
+      // The page is stuck, so start over with a fresh one.
+      await page.reload();
+      await page.waitForSelector("body[data-ready]", { timeout: 15000 });
+      continue;
+    }
+    const { samples, sampleRate } = result;
     const { activeSamples, glitches, gaps } = analyze(samples, sampleRate);
     const ok =
       activeSamples > sampleRate && glitches.length === 0 && gaps.length === 0;

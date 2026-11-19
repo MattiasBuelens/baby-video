@@ -682,14 +682,24 @@ export class BabyVideoElement extends HTMLElement {
     );
   }
 
+  // The time to look up the frame at current time with, see isFrameAtTime().
+  // findFrameForTime() uses forward semantics, so for reverse playback we look
+  // just before current time, to find the frame *ending* at a frame boundary.
+  #frameLookupTime(direction: Direction): number {
+    // Look 10µs back, to step over rounding gaps between frames (see isFrameAtTime).
+    return direction === Direction.BACKWARD
+      ? Math.max(0, this.#currentTime - 1e-5)
+      : this.#currentTime;
+  }
+
   #hasDecodedFrameAtTime(
     frames: ReadonlyArray<{ timestamp: number; duration: number | null }>,
     timeInMicros: number
   ): boolean {
-    return frames.some(
-      (frame) =>
-        frame.timestamp <= timeInMicros &&
-        timeInMicros < frame.timestamp + frame.duration!
+    const direction =
+      this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
+    return frames.some((frame) =>
+      isFrameAtTime(frame, direction, timeInMicros)
     );
   }
 
@@ -733,7 +743,9 @@ export class BabyVideoElement extends HTMLElement {
     }
     // Decode frames for current time
     if (this.#furthestDecodingVideoFrame === undefined) {
-      const frameAtTime = videoTrackBuffer.findFrameForTime(this.currentTime);
+      const frameAtTime = videoTrackBuffer.findFrameForTime(
+        this.#frameLookupTime(direction)
+      );
       if (frameAtTime === undefined) {
         return;
       }
@@ -792,6 +804,15 @@ export class BabyVideoElement extends HTMLElement {
       }
       this.#videoDecoder.decode(frame);
       this.#decodingVideoFrames.push(frame);
+    }
+    if (direction === Direction.BACKWARD && !BUG_DECODE_VIDEO_IN_REVERSE) {
+      // The decoder may hold on to the last few frames for reordering, until it
+      // sees more input. Backward, the next batch is an earlier GOP, which we
+      // might not decode until these frames come out, so flush them out now.
+      // After a flush, the decoder needs a key frame, which an earlier GOP
+      // starts with anyway.
+      this.#videoDecoder.flush().catch(() => {});
+      this.#needKeyFrame = true;
     }
     // The "furthest decoded frame" depends on the rendering order,
     // since we must decode the frames in their original order.
@@ -883,12 +904,9 @@ export class BabyVideoElement extends HTMLElement {
       }
     }
     // Render the frame at current time.
-    let currentFrameIndex = this.#decodedVideoFrames.findIndex((frame) => {
-      return (
-        frame.timestamp <= currentTimeInMicros &&
-        currentTimeInMicros < frame.timestamp + frame.duration!
-      );
-    });
+    let currentFrameIndex = this.#decodedVideoFrames.findIndex((frame) =>
+      isFrameAtTime(frame, direction, currentTimeInMicros)
+    );
     if (currentFrameIndex < 0) {
       // Decode more frames (if we now have more space in the queue)
       this.#decodeVideoFrames();
@@ -956,7 +974,9 @@ export class BabyVideoElement extends HTMLElement {
     }
     // Decode audio for current time
     if (this.#furthestDecodedAudioFrame === undefined) {
-      const frameAtTime = audioTrackBuffer.findFrameForTime(this.currentTime);
+      const frameAtTime = audioTrackBuffer.findFrameForTime(
+        this.#frameLookupTime(direction)
+      );
       if (frameAtTime === undefined) {
         return;
       }
@@ -1432,6 +1452,31 @@ export class BabyVideoElement extends HTMLElement {
 
 customElements.define("baby-video", BabyVideoElement);
 
+// Whether the frame is the one to render at the given time.
+// Forward, that's the frame covering [timestamp, timestamp + duration).
+// Backward, it's the frame covering (timestamp, timestamp + duration]: at a
+// frame boundary, the frame *before* the boundary plays next. This must agree
+// with isFrameBeyondTime(), or a frame can be "at" the current time and
+// "beyond" it at the same time, and a seek to that time never completes.
+function isFrameAtTime(
+  frame: { timestamp: number; duration: number | null },
+  direction: Direction,
+  timeInMicros: number
+): boolean {
+  const end = frame.timestamp + frame.duration!;
+  if (direction == Direction.FORWARD) {
+    return frame.timestamp <= timeInMicros && timeInMicros < end;
+  } else {
+    // Timestamps are rounded to whole microseconds, so a frame can end slightly
+    // before the next one starts. Allow for that, or a frame boundary might fall
+    // in between two frames.
+    return (
+      frame.timestamp < timeInMicros &&
+      timeInMicros <= end + getFrameTolerance(frame)
+    );
+  }
+}
+
 function isFrameBeyondTime(
   frame: { timestamp: number; duration: number | null },
   direction: Direction,
@@ -1444,7 +1489,7 @@ function isFrameBeyondTime(
   }
 }
 
-function getFrameTolerance(frame: EncodedChunk | AudioData | VideoFrame) {
+function getFrameTolerance(frame: { duration: number | null }) {
   return Math.ceil(frame.duration! / 16);
 }
 
