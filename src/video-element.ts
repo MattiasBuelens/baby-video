@@ -62,6 +62,12 @@ const decodeQueueHwm = 30;
 const audioBufferLwm = 1;
 const audioBufferHwm = 2;
 
+// Maximum number of audio frames to decode in one batch for reverse playback.
+// A batch is only pushed to the audio sink once it's fully decoded (see
+// #processAudioDecodeQueue), so a large batch can starve the sink right after
+// a seek. A small batch means more preroll frames to decode, which is cheap.
+const maxReverseAudioBatchFrames = 16;
+
 // Maximum number of decoded audio frames to hold on to
 // while the audio worklet module is still loading.
 const maxPendingAudioFrames = 200;
@@ -78,6 +84,13 @@ interface DecodedAudioFrame {
   readonly frame: AudioData;
   readonly timestamp: number;
   readonly duration: number;
+}
+
+// A batch of audio frames that is decoded in forward order, but must be rendered
+// in reverse order. Its frames are held back until the whole batch is decoded.
+interface ReverseAudioBatch {
+  remaining: number;
+  readonly decoded: DecodedAudioFrame[];
 }
 
 // A chunk of audio that was pushed to the audio sink.
@@ -132,6 +145,12 @@ export class BabyVideoElement extends HTMLElement {
   #nextDecodedAudioFramePromise: Deferred<void> | undefined = undefined;
   #originalDecodingAudioFrames: WeakMap<EncodedAudioChunk, EncodedAudioChunk> =
     new WeakMap();
+  // Frames that are only decoded to prime the decoder, see AudioDecodeQueue.
+  #prerollAudioFrames: WeakSet<EncodedAudioChunk> = new WeakSet();
+  // For reverse playback: the batch that each decoding frame belongs to.
+  #reverseAudioBatchOfFrame: WeakMap<EncodedAudioChunk, ReverseAudioBatch> =
+    new WeakMap();
+  #reverseAudioBatches: ReverseAudioBatch[] = [];
 
   #audioSink: BabyAudioSink | undefined;
   // Audio that was handed to the sink but not consumed by it yet, in push order.
@@ -957,7 +976,9 @@ export class BabyVideoElement extends HTMLElement {
           : decodeQueueHwm;
       const nextQueue = audioTrackBuffer.getNextFrames(
         lastFrame,
-        Math.max(1, frameCount),
+        direction === Direction.BACKWARD
+          ? Math.min(Math.max(1, frameCount), maxReverseAudioBatchFrames)
+          : Math.max(1, frameCount),
         direction
       );
       if (nextQueue === undefined) {
@@ -975,18 +996,20 @@ export class BabyVideoElement extends HTMLElement {
       this.#pendingAudioFrames,
       (frame) => frame.duration
     );
-    const decoding = sumWith(
-      this.#decodingAudioFrames,
-      (chunk) => chunk.duration!
+    const decoding = sumWith(this.#decodingAudioFrames, (chunk) =>
+      this.#prerollAudioFrames.has(chunk) ? 0 : chunk.duration!
     );
-    return (pushed + pending + decoding) / 1e6;
+    const held = sumWith(this.#reverseAudioBatches, (batch) =>
+      sumWith(batch.decoded, (frame) => frame.duration)
+    );
+    return (pushed + pending + decoding + held) / 1e6;
   }
 
   #processAudioDecodeQueue(
     decodeQueue: AudioDecodeQueue,
     direction: Direction
   ): void {
-    const { frames, codecConfig } = decodeQueue;
+    const { frames, preroll, codecConfig } = decodeQueue;
     if (DEBUG) {
       console.log(
         `decode audio frames: timestamp=${frames[0].timestamp} count=${frames.length}`
@@ -999,12 +1022,18 @@ export class BabyVideoElement extends HTMLElement {
       this.#audioDecoder.configure(codecConfig);
       this.#lastAudioDecoderConfig = codecConfig;
     }
-    if (direction === Direction.BACKWARD) {
-      // Audio has no dependencies between frames, so we can decode them
-      // in the same order as they will be rendered.
-      frames.reverse();
+    // Always decode in forward order, even for reverse playback: audio frames
+    // depend on the previous frame (see AudioDecodeQueue.preroll). For reverse
+    // playback, we hold back the decoded frames until the whole batch is done,
+    // and then push them to the sink in reverse order.
+    const batch: ReverseAudioBatch | undefined =
+      direction === Direction.BACKWARD
+        ? { remaining: frames.length, decoded: [] }
+        : undefined;
+    if (batch !== undefined) {
+      this.#reverseAudioBatches.push(batch);
     }
-    for (const frame of frames) {
+    for (const frame of [...preroll, ...frames]) {
       // AudioDecoder does not always preserve EncodedAudioChunk.timestamp
       // to the decoded AudioData.timestamp, instead it adds up the sample durations
       // since the last decoded chunk. This breaks reverse playback, since we
@@ -1016,13 +1045,18 @@ export class BabyVideoElement extends HTMLElement {
         this.#audioDecoderTimestamp
       );
       this.#originalDecodingAudioFrames.set(newFrame, frame);
+      if (!frames.includes(frame)) {
+        this.#prerollAudioFrames.add(newFrame);
+      } else if (batch !== undefined) {
+        this.#reverseAudioBatchOfFrame.set(newFrame, batch);
+      }
       this.#audioDecoder.decode(newFrame);
       this.#decodingAudioFrames.push(newFrame);
       this.#audioDecoderTimestamp += frame.duration!;
     }
-    // The "furthest audio frame" is always the last one,
-    // since we decode them in rendering order (see above).
-    this.#furthestDecodedAudioFrame = frames[frames.length - 1];
+    // The "furthest audio frame" is the last one in rendering order.
+    this.#furthestDecodedAudioFrame =
+      direction === Direction.BACKWARD ? frames[0] : frames[frames.length - 1];
   }
 
   #onAudioData(frame: AudioData): void {
@@ -1041,6 +1075,11 @@ export class BabyVideoElement extends HTMLElement {
     }
     const decodingFrame = this.#decodingAudioFrames[decodingFrameIndex];
     arrayRemoveAt(this.#decodingAudioFrames, decodingFrameIndex);
+    if (this.#prerollAudioFrames.has(decodingFrame)) {
+      // Only decoded to prime the decoder.
+      frame.close();
+      return;
+    }
     // Restore the original timestamp, which the decoder did not preserve.
     const originalFrame = this.#originalDecodingAudioFrames.get(decodingFrame)!;
     const decodedFrame: DecodedAudioFrame = {
@@ -1048,6 +1087,34 @@ export class BabyVideoElement extends HTMLElement {
       timestamp: originalFrame.timestamp,
       duration: originalFrame.duration!
     };
+    const batch = this.#reverseAudioBatchOfFrame.get(decodingFrame);
+    if (batch === undefined) {
+      this.#renderDecodedAudioFrame(decodedFrame);
+    } else {
+      batch.decoded.push(decodedFrame);
+      batch.remaining--;
+      if (batch.remaining > 0) {
+        return;
+      }
+      // The decoder outputs frames in order, so batches complete in order too.
+      arrayRemoveAt(
+        this.#reverseAudioBatches,
+        this.#reverseAudioBatches.indexOf(batch)
+      );
+      for (let i = batch.decoded.length - 1; i >= 0; i--) {
+        this.#renderDecodedAudioFrame(batch.decoded[i]);
+      }
+    }
+    if (this.#nextDecodedAudioFramePromise) {
+      this.#nextDecodedAudioFramePromise.resolve();
+      this.#nextDecodedAudioFramePromise = undefined;
+    }
+    // Decode more frames (if we now have more space in the queue)
+    this.#decodeAudio();
+  }
+
+  #renderDecodedAudioFrame(decodedFrame: DecodedAudioFrame): void {
+    const { frame } = decodedFrame;
     // Drop frames that are beyond current time, since we're too late to render them.
     const currentTimeInMicros = Math.floor(1e6 * this.#currentTime);
     const direction =
@@ -1059,20 +1126,12 @@ export class BabyVideoElement extends HTMLElement {
         );
       }
       frame.close();
-      // Decode more frames (if we now have more space in the queue)
-      this.#decodeAudio();
       return;
     }
     if (DEBUG) {
       console.log(`decoded audio frame at timestamp=${decodedFrame.timestamp}`);
     }
     this.#pushAudioToSink(decodedFrame, direction);
-    if (this.#nextDecodedAudioFramePromise) {
-      this.#nextDecodedAudioFramePromise.resolve();
-      this.#nextDecodedAudioFramePromise = undefined;
-    }
-    // Decode more frames (if we now have more space in the queue)
-    this.#decodeAudio();
   }
 
   #ensureAudioSink(
@@ -1191,6 +1250,12 @@ export class BabyVideoElement extends HTMLElement {
       pendingFrame.frame.close();
     }
     this.#pendingAudioFrames.length = 0;
+    for (const batch of this.#reverseAudioBatches) {
+      for (const decodedFrame of batch.decoded) {
+        decodedFrame.frame.close();
+      }
+    }
+    this.#reverseAudioBatches.length = 0;
     this.#pushedAudioChunks.length = 0;
     // Drop all queued audio, and report the new position until it catches up.
     this.#audioSink?.flush(Math.round(1e6 * mediaTime));

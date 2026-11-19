@@ -100,9 +100,21 @@ export abstract class TrackBuffer<T extends EncodedChunk = EncodedChunk> {
 }
 
 export interface AudioDecodeQueue extends DecodeQueue {
+  // The frames to decode and render, in presentation order.
   frames: EncodedAudioChunk[];
+  // Frames right before `frames`, in presentation order, which must be decoded
+  // first (but not rendered) to prime the decoder. See audioDecoderPrerollFrames.
+  preroll: EncodedAudioChunk[];
   codecConfig: AudioDecoderConfig;
 }
+
+// Number of frames to decode (and then discard) before a frame that does not
+// immediately follow the previously decoded frame.
+// Audio frames are *not* independent: AAC uses overlapping MDCT windows, so the
+// first half of each decoded frame is overlap-added with the tail of the
+// previous frame (and SBR in HE-AAC adds even more state). Without preroll,
+// the first decoded frame after a discontinuity is distorted.
+const audioDecoderPrerollFrames = 2;
 
 export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
   protected declare codecConfig: AudioDecoderConfig;
@@ -137,10 +149,22 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
   }
 
   getDecodeDependenciesForFrame(frame: EncodedAudioChunk): AudioDecodeQueue {
+    const frameIndex = this.#frames.indexOf(frame);
     return {
       frames: [frame],
+      preroll: this.#getPrerollFrames(frameIndex),
       codecConfig: this.codecConfig
     };
+  }
+
+  #getPrerollFrames(startIndex: number): EncodedAudioChunk[] {
+    if (startIndex < 0) {
+      return [];
+    }
+    return this.#frames.slice(
+      Math.max(0, startIndex - audioDecoderPrerollFrames),
+      startIndex
+    );
   }
 
   getNextFrames(
@@ -159,18 +183,22 @@ export class AudioTrackBuffer extends TrackBuffer<EncodedAudioChunk> {
       }
       return {
         frames: this.#frames.slice(nextIndex, nextIndex + maxAmount),
+        // The decoder has just decoded the previous frame, so no preroll needed.
+        preroll: [],
         codecConfig: this.codecConfig
       };
     } else {
-      const nextIndex = frameIndex - 1;
-      if (nextIndex < 0) {
+      // Take the frames *up to and including* the one right before `frame`.
+      const endIndex = frameIndex;
+      const startIndex = Math.max(0, endIndex - maxAmount);
+      if (startIndex >= endIndex) {
         return undefined;
       }
       return {
-        frames: this.#frames.slice(
-          Math.max(0, nextIndex - maxAmount),
-          nextIndex
-        ),
+        frames: this.#frames.slice(startIndex, endIndex),
+        // These frames will be decoded in forward order, but after the decoder
+        // saw a *later* frame, so it must be primed again.
+        preroll: this.#getPrerollFrames(startIndex),
         codecConfig: this.codecConfig
       };
     }
