@@ -19,8 +19,10 @@ import {
 import { TimeRange, TimeRanges } from "./time-ranges";
 import {
   AudioDecodeQueue,
+  AudioTrackBuffer,
   EncodedChunk,
-  VideoDecodeQueue
+  VideoDecodeQueue,
+  VideoTrackBuffer
 } from "./track-buffer";
 import { BabyAudioSink } from "./audio-sink";
 import type {
@@ -386,6 +388,11 @@ export class BabyVideoElement extends HTMLElement {
     if (this.#playbackRate >= 0 && this.#ended) {
       this.#seek(0);
     }
+    // Deviation from the spec: likewise, if playback has ended (i.e. reached the
+    // start) and the direction of playback is backwards, seek to the end.
+    if (this.#playbackRate < 0 && this.#ended) {
+      this.#seek(this.#duration);
+    }
     if (this.#paused) {
       // 3. If the media element's paused attribute is true, then:
       // 3.1. Change the value of paused to false.
@@ -557,7 +564,25 @@ export class BabyVideoElement extends HTMLElement {
     // when the direction of playback is backwards, then the user agent must only queue a media element
     // task given the media element to fire an event named timeupdate at the element.
     else {
-      queueTask(() => this.dispatchEvent(new Event("timeupdate")));
+      queueTask(() => {
+        this.dispatchEvent(new Event("timeupdate"));
+        // Deviation from the spec: also pause, like when reaching the end
+        // in the forward direction (but without firing ended). Otherwise the
+        // element stays "playing" without anything to play, and play() can't
+        // be used to restart playback (see #internalPlay()).
+        if (this.#ended && this.#playbackRate < 0 && !this.#paused) {
+          this.#paused = true;
+          this.#updatePlaying();
+          this.dispatchEvent(new Event("pause"));
+          const error = new DOMException(
+            "Aborted because reached start",
+            "AbortError"
+          );
+          this.#takePendingPlayPromises().forEach((deferred) =>
+            deferred.reject(error)
+          );
+        }
+      });
     }
   }
 
@@ -648,9 +673,25 @@ export class BabyVideoElement extends HTMLElement {
     while (true) {
       if (this.#readyState <= MediaReadyState.HAVE_CURRENT_DATA) {
         await waitForEvent(this, "canplay", signal);
-      } else if (!this.#hasDecodedVideoFrameAtTime(timeInMicros)) {
+      } else if (
+        !this.#hasDecodedVideoFrameAtTime(timeInMicros) &&
+        this.#hasBufferedFrameAtTime(
+          this.#srcObject
+            ? getActiveVideoTrackBuffer(this.#srcObject)
+            : undefined,
+          timeInMicros
+        )
+      ) {
         await this.#waitForNextDecodedVideoFrame(signal);
-      } else if (!this.#hasDecodedAudioFrameAtTime(timeInMicros)) {
+      } else if (
+        !this.#hasDecodedAudioFrameAtTime(timeInMicros) &&
+        this.#hasBufferedFrameAtTime(
+          this.#srcObject
+            ? getActiveAudioTrackBuffer(this.#srcObject)
+            : undefined,
+          timeInMicros
+        )
+      ) {
         await this.#waitForNextDecodedAudioFrame(signal);
       } else {
         break;
@@ -685,22 +726,50 @@ export class BabyVideoElement extends HTMLElement {
   // The time to look up the frame at current time with, see isFrameAtTime().
   // findFrameForTime() uses forward semantics, so for reverse playback we look
   // just before current time, to find the frame *ending* at a frame boundary.
-  #frameLookupTime(direction: Direction): number {
+  #frameLookupTime(
+    direction: Direction,
+    time: number = this.#currentTime
+  ): number {
     // Look 10µs back, to step over rounding gaps between frames (see isFrameAtTime).
-    return direction === Direction.BACKWARD
-      ? Math.max(0, this.#currentTime - 1e-5)
-      : this.#currentTime;
+    return direction === Direction.BACKWARD ? Math.max(0, time - 1e-5) : time;
+  }
+
+  // Whether the track has a frame at the given time at all.
+  // Tracks can end at different times (e.g. audio may extend past the last
+  // video frame), so there might be nothing to decode for that track.
+  #hasBufferedFrameAtTime(
+    trackBuffer: AudioTrackBuffer | VideoTrackBuffer | undefined,
+    timeInMicros: number
+  ): boolean {
+    if (trackBuffer === undefined) {
+      return false;
+    }
+    const direction = this.#frameDirectionAt(timeInMicros);
+    return (
+      trackBuffer.findFrameForTime(
+        this.#frameLookupTime(direction, timeInMicros / 1e6)
+      ) !== undefined
+    );
   }
 
   #hasDecodedFrameAtTime(
     frames: ReadonlyArray<{ timestamp: number; duration: number | null }>,
     timeInMicros: number
   ): boolean {
-    const direction =
-      this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
+    const direction = this.#frameDirectionAt(timeInMicros);
     return frames.some((frame) =>
       isFrameAtTime(frame, direction, timeInMicros)
     );
+  }
+
+  // The direction to use for isFrameAtTime() and isFrameBeyondTime().
+  // Backward, the frame at a time is the one *ending* there, but no frame ends
+  // at the very start. There, the first frame is the one at current time, as if
+  // playing forward. (Reverse playback ends there, so there's nothing to play.)
+  #frameDirectionAt(timeInMicros: number): Direction {
+    return this.#playbackRate < 0 && timeInMicros > 0
+      ? Direction.BACKWARD
+      : Direction.FORWARD;
   }
 
   async #waitForNextDecodedVideoFrame(signal: AbortSignal): Promise<void> {
@@ -841,8 +910,7 @@ export class BabyVideoElement extends HTMLElement {
     arrayRemoveAt(this.#decodingVideoFrames, decodingFrameIndex);
     // Drop frames that are beyond current time, since we're too late to render them.
     const currentTimeInMicros = Math.floor(1e6 * this.#currentTime);
-    const direction =
-      this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
+    const direction = this.#frameDirectionAt(currentTimeInMicros);
     if (isFrameBeyondTime(decodingFrame, direction, currentTimeInMicros)) {
       if (DEBUG) {
         console.log(
@@ -893,8 +961,7 @@ export class BabyVideoElement extends HTMLElement {
   #renderVideoFrame(): void {
     this.#nextRenderFrame = 0;
     const currentTimeInMicros = Math.floor(1e6 * this.#currentTime);
-    const direction =
-      this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
+    const direction = this.#frameDirectionAt(currentTimeInMicros);
     // Drop all frames that are before current time, since we're too late to render them.
     for (let i = this.#decodedVideoFrames.length - 1; i >= 0; i--) {
       const frame = this.#decodedVideoFrames[i];
@@ -1080,9 +1147,22 @@ export class BabyVideoElement extends HTMLElement {
   }
 
   #onAudioData(frame: AudioData): void {
-    const decodingFrameIndex = this.#decodingAudioFrames.findIndex((x) =>
+    let decodingFrameIndex = this.#decodingAudioFrames.findIndex((x) =>
       isFrameTimestampEqual(x, frame)
     );
+    if (
+      decodingFrameIndex < 0 &&
+      this.#decodingAudioFrames.length > 0 &&
+      frame.timestamp > this.#decodingAudioFrames[0].timestamp
+    ) {
+      // The decoder computes output timestamps from the number of decoded
+      // samples, which drifts from our chunk timestamps whenever a chunk's
+      // duration doesn't match its decoded length. For example, the last frame
+      // of a stream is often shorter than a full AAC frame, yet still decodes
+      // to a full frame. The decoder outputs frames in decode order, so this
+      // must be the oldest frame that's still decoding.
+      decodingFrameIndex = 0;
+    }
     if (decodingFrameIndex < 0) {
       // Drop frames that are no longer in the decode queue.
       if (DEBUG) {
@@ -1139,7 +1219,13 @@ export class BabyVideoElement extends HTMLElement {
     const currentTimeInMicros = Math.floor(1e6 * this.#currentTime);
     const direction =
       this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
-    if (isFrameBeyondTime(decodedFrame, direction, currentTimeInMicros)) {
+    if (
+      isFrameBeyondTime(
+        decodedFrame,
+        this.#frameDirectionAt(currentTimeInMicros),
+        currentTimeInMicros
+      )
+    ) {
       if (DEBUG) {
         console.log(
           `dropping decoded audio frame at timestamp=${decodedFrame.timestamp}, beyond currentTime=${currentTimeInMicros}us`
