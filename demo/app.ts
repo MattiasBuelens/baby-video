@@ -157,14 +157,23 @@ function hasBufferedLastSegments(): boolean {
 // This must also happen when buffering backwards, starting from the end:
 // otherwise the buffered ranges end where the *shortest* track ends, and
 // playback can't start at the very end. Appending another segment re-opens the
-// media source, so check again after every append.
-function maybeEndOfStream() {
-  if (
-    mediaSource.readyState === "open" &&
-    !mediaSource.sourceBuffers.some((sourceBuffer) => sourceBuffer.updating) &&
-    hasBufferedLastSegments()
-  ) {
-    mediaSource.endOfStream();
+// media source, so this must run again after every append. endOfStream() can't
+// be called while another track is still updating, so wait for that first:
+// if we skipped it instead, the media source could stay open forever.
+async function maybeEndOfStream(signal: AbortSignal) {
+  while (true) {
+    signal.throwIfAborted();
+    if (mediaSource.readyState !== "open" || !hasBufferedLastSegments()) {
+      return;
+    }
+    const updating = mediaSource.sourceBuffers.find(
+      (sourceBuffer) => sourceBuffer.updating
+    );
+    if (updating === undefined) {
+      mediaSource.endOfStream();
+      return;
+    }
+    await waitForEvent(updating, "updateend", signal);
   }
 }
 
@@ -237,7 +246,7 @@ async function trackBufferLoop(
     ).arrayBuffer();
     sourceBuffer.appendBuffer(segmentData);
     await waitForEvent(sourceBuffer, "updateend");
-    maybeEndOfStream();
+    await maybeEndOfStream(signal);
     // Check if we're done buffering
     if (forward) {
       if (nextSegment.isLast) {
@@ -260,7 +269,7 @@ async function bufferLoop(signal: AbortSignal) {
   signal.throwIfAborted();
   // All tracks are done buffering until the last segment
   // (or until the first segment, when buffering backwards).
-  maybeEndOfStream();
+  await maybeEndOfStream(signal);
 }
 
 let bufferAbortController: AbortController = new AbortController();
