@@ -1,4 +1,5 @@
 import "media-chrome";
+import "media-chrome/menu";
 import {
   BabyMediaSource,
   BabySourceBuffer,
@@ -6,24 +7,12 @@ import {
 } from "../src/index";
 import { TimeRanges } from "../src/time-ranges";
 import { waitForEvent } from "../src/util";
+import { setupBufferView, sourceBufferTrack } from "./buffer-view";
+import { setupEventLog } from "./event-log";
 
 const video = document.querySelector<BabyVideoElement>("baby-video")!;
-video.addEventListener("loadedmetadata", logEvent);
-video.addEventListener("loadeddata", logEvent);
-video.addEventListener("canplay", logEvent);
-video.addEventListener("canplaythrough", logEvent);
-video.addEventListener("waiting", logEvent);
-video.addEventListener("play", logEvent);
-video.addEventListener("pause", logEvent);
-video.addEventListener("playing", logEvent);
-// video.addEventListener("timeupdate", logEvent);
-video.addEventListener("durationchange", logEvent);
-video.addEventListener("ratechange", logEvent);
-video.addEventListener("seeking", logEvent);
-video.addEventListener("seeked", logEvent);
-video.addEventListener("progress", logEvent);
-video.addEventListener("resize", logEvent);
-video.addEventListener("ended", logEvent);
+setupEventLog(video, document.querySelector(".event-log")!);
+setupPlaybackButtons(video);
 
 const streamDuration = 634.56;
 
@@ -39,6 +28,20 @@ const videoSourceBuffer = mediaSource.addSourceBuffer(
 const audioSourceBuffer = mediaSource.addSourceBuffer(
   'audio/mp4; codecs="mp4a.40.5"'
 );
+setupBufferView(video, document.querySelector(".buffer-view")!, [
+  {
+    label: "<baby-video>.buffered",
+    className: "buffer-row-element",
+    buffered: () => video.buffered
+  },
+  sourceBufferTrack(
+    "video SourceBuffer",
+    "buffer-row-video",
+    videoSourceBuffer
+  ),
+  sourceBufferTrack("audio SourceBuffer", "buffer-row-audio", audioSourceBuffer)
+]);
+
 const videoInitSegmentURL =
   "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps_1920x1080_8000k/bbb_30fps_1920x1080_8000k_0.m4v";
 const audioInitSegmentURL =
@@ -213,6 +216,23 @@ video.addEventListener("seeking", restartBuffering);
 video.addEventListener("ratechange", restartBuffering);
 restartBuffering();
 
-function logEvent(event: Event) {
-  console.log(`${event.type} @ ${video.currentTime}`);
+function setupPlaybackButtons(video: BabyVideoElement) {
+  const buttons =
+    document.querySelectorAll<HTMLButtonElement>("button[data-rate]");
+  buttons.forEach((button) => {
+    button.addEventListener("click", () => {
+      video.playbackRate = Number(button.dataset.rate);
+      void video.play();
+    });
+  });
+  const updatePressed = () => {
+    buttons.forEach((button) => {
+      const pressed =
+        !video.paused && Number(button.dataset.rate) === video.playbackRate;
+      button.setAttribute("aria-pressed", String(pressed));
+    });
+  };
+  for (const type of ["ratechange", "play", "pause", "ended"]) {
+    video.addEventListener(type, updatePressed);
+  }
 }
