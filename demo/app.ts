@@ -113,6 +113,61 @@ function getAudioSegmentForTime(time: number): Segment | undefined {
   );
 }
 
+// Finds the buffered range containing the given time. Tracks can end at
+// slightly different times, so if the track's last segment is buffered,
+// times past its end (up to the stream duration) count as part of its last range.
+function findBufferedRange(
+  sourceBuffer: BabySourceBuffer,
+  segmentForTime: (time: number) => Segment | undefined,
+  time: number
+): readonly [number, number] | undefined {
+  const buffered = sourceBuffer.buffered;
+  const range = buffered.find(time);
+  if (range !== undefined || buffered.length === 0) {
+    return range;
+  }
+  const lastRange = [
+    buffered.start(buffered.length - 1),
+    buffered.end(buffered.length - 1)
+  ] as const;
+  const lastSegment = segmentForTime(streamDuration)!;
+  if (lastRange[1] > lastSegment.startTime && time >= lastRange[1]) {
+    return lastRange;
+  }
+  return undefined;
+}
+
+// Whether every track has buffered (part of) its last segment.
+function hasBufferedLastSegments(): boolean {
+  return (
+    findBufferedRange(
+      videoSourceBuffer,
+      getVideoSegmentForTime,
+      streamDuration
+    ) !== undefined &&
+    findBufferedRange(
+      audioSourceBuffer,
+      getAudioSegmentForTime,
+      streamDuration
+    ) !== undefined
+  );
+}
+
+// Signals the end of the stream once the last segments are buffered.
+// This must also happen when buffering backwards, starting from the end:
+// otherwise the buffered ranges end where the *shortest* track ends, and
+// playback can't start at the very end. Appending another segment re-opens the
+// media source, so check again after every append.
+function maybeEndOfStream() {
+  if (
+    mediaSource.readyState === "open" &&
+    !mediaSource.sourceBuffers.some((sourceBuffer) => sourceBuffer.updating) &&
+    hasBufferedLastSegments()
+  ) {
+    mediaSource.endOfStream();
+  }
+}
+
 const forwardBufferSize = 30;
 const backwardBufferSize = 10;
 
@@ -127,7 +182,11 @@ async function trackBufferLoop(
     signal.throwIfAborted();
     // Check buffer health
     while (true) {
-      const currentRange = sourceBuffer.buffered.find(video.currentTime);
+      const currentRange = findBufferedRange(
+        sourceBuffer,
+        segmentForTime,
+        video.currentTime
+      );
       const forward = video.playbackRate >= 0;
       if (!currentRange) {
         // No buffer, need new segment immediately
@@ -148,7 +207,11 @@ async function trackBufferLoop(
       await waitForEvent(video, ["timeupdate", "ratechange"], signal);
     }
     // Find next segment
-    const currentRange = sourceBuffer.buffered.find(video.currentTime);
+    const currentRange = findBufferedRange(
+      sourceBuffer,
+      segmentForTime,
+      video.currentTime
+    );
     const forward = video.playbackRate >= 0;
     const nextTime = currentRange
       ? forward
@@ -174,6 +237,7 @@ async function trackBufferLoop(
     ).arrayBuffer();
     sourceBuffer.appendBuffer(segmentData);
     await waitForEvent(sourceBuffer, "updateend");
+    maybeEndOfStream();
     // Check if we're done buffering
     if (forward) {
       if (nextSegment.isLast) {
@@ -195,10 +259,8 @@ async function bufferLoop(signal: AbortSignal) {
   ]);
   signal.throwIfAborted();
   // All tracks are done buffering until the last segment
-  const forward = video.playbackRate >= 0;
-  if (forward) {
-    mediaSource.endOfStream();
-  }
+  // (or until the first segment, when buffering backwards).
+  maybeEndOfStream();
 }
 
 let bufferAbortController: AbortController = new AbortController();
