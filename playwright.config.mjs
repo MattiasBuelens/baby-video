@@ -12,7 +12,9 @@ export default defineConfig({
   workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? "github" : "list",
+  // On CI, the github reporter only adds failure annotations, and Playwright
+  // would add its default "dot" reporter for the log. Use "list" there too.
+  reporter: process.env.CI ? [["list"], ["github"]] : "list",
   use: {
     baseURL: `http://localhost:${port}/baby-video/`,
     trace: "retain-on-failure"
