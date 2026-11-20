@@ -1,35 +1,6 @@
 // Checks what happens around the start of the media in reverse playback:
 // seeking to 0, reaching 0 while playing, and calling play() at 0.
-//
-// Usage: npx vite --port 5173 &  node test/playback-start.spec.mjs
-import { chromium } from "playwright";
-
-const baseUrl = process.env.BASE_URL ?? "http://localhost:5173/baby-video/";
-
-// Runs `fn` in the page, with a timeout so a hang fails the test.
-async function run(page, name, fn, arg, timeout = 10000) {
-  try {
-    const result = await Promise.race([
-      page.evaluate(fn, arg),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("timed out")), timeout)
-      )
-    ]);
-    return result;
-  } catch (error) {
-    console.log(`FAIL ${name}: ${error.message}`);
-    await page.reload();
-    await page.waitForSelector("body[data-ready]", { timeout: 15000 });
-    return undefined;
-  }
-}
-
-function check(name, condition, details) {
-  console.log(
-    `${condition ? "PASS" : "FAIL"} ${name}: ${JSON.stringify(details)}`
-  );
-  return condition;
-}
+import { test, expect } from "@playwright/test";
 
 // Page-side helpers, installed once per page.
 function install() {
@@ -69,85 +40,64 @@ function install() {
   });
 }
 
-async function main() {
-  const browser = await chromium.launch({
-    args: ["--autoplay-policy=no-user-gesture-required"]
-  });
-  const page = await browser.newPage();
+test.beforeEach(async ({ page }) => {
   page.on("pageerror", (err) => console.error("[page]", err));
-  const open = async () => {
-    await page.goto(new URL("test/audio-glitch.html", baseUrl).href);
-    await page.waitForSelector("body[data-ready]", { timeout: 15000 });
-    await page.evaluate(install);
-  };
-  let ok = true;
+  await page.goto("test/audio-glitch.html");
+  await page.waitForSelector("body[data-ready]");
+  await page.evaluate(install);
+});
 
-  // Forward seek to 0, as a baseline.
-  await open();
-  let state = await run(page, "forward seek to 0", async () => {
+test("forward seek to 0", async ({ page }) => {
+  const state = await page.evaluate(async () => {
     await window.seek(0, 1);
     return window.state();
   });
-  ok =
-    state !== undefined &&
-    check("forward seek to 0", state.currentTime === 0, state) &&
-    ok;
+  expect(state.currentTime).toBe(0);
+});
 
-  // Reverse seek to 0.
-  await open();
-  state = await run(page, "reverse seek to 0", async () => {
+test("reverse seek to 0", async ({ page }) => {
+  const state = await page.evaluate(async () => {
     await window.seek(0, -1);
     return window.state();
   });
-  ok =
-    state !== undefined &&
-    check("reverse seek to 0", state.currentTime === 0, state) &&
-    ok;
+  expect(state.currentTime).toBe(0);
+});
 
-  // Reverse playback reaching the start: pauses, without ended.
-  await open();
-  state = await run(page, "reverse playback reaches start", async () => {
+test("reverse playback pauses at the start, without ended", async ({
+  page
+}) => {
+  const state = await page.evaluate(async () => {
     await window.seek(0.5, -1);
     await document.querySelector("baby-video").play();
     await new Promise((resolve) => setTimeout(resolve, 1500));
     return window.state();
   });
-  ok =
-    state !== undefined &&
-    check(
-      "reverse playback reaches start",
-      state.currentTime === 0 &&
-        state.paused &&
-        state.events.includes("pause") &&
-        !state.events.includes("ended"),
-      state
-    ) &&
-    ok;
+  expect(state).toMatchObject({ currentTime: 0, paused: true, ended: false });
+  expect(state.events).toContain("pause");
+  expect(state.events).not.toContain("ended");
+});
 
-  // play() at the start in reverse: restarts from the end, keeping the rate.
-  state = await run(page, "play() at start in reverse", async () => {
+test("play() at the start in reverse restarts from the end", async ({
+  page
+}) => {
+  const state = await page.evaluate(async () => {
+    // Play backwards until playback pauses at the start.
+    await window.seek(0.5, -1);
     const video = document.querySelector("baby-video");
+    await video.play();
+    if (!video.paused) {
+      await new Promise((resolve) =>
+        video.addEventListener("pause", resolve, { once: true })
+      );
+    }
     window.events.length = 0;
     await video.play();
     await new Promise((resolve) => setTimeout(resolve, 1500));
     return window.state();
   });
-  ok =
-    state !== undefined &&
-    check(
-      "play() at start in reverse",
-      !state.paused &&
-        state.playbackRate === -1 &&
-        // Restarted from the end, and actually playing backwards from there.
-        state.currentTime > state.duration - 2 &&
-        state.currentTime < state.duration - 1 &&
-        !state.events.includes("ratechange"),
-      state
-    ) &&
-    ok;
-
-  await browser.close();
-  process.exitCode = ok ? 0 : 1;
-}
-
-await main();
+  // Restarted from the end, keeping the rate, and actually playing backwards.
+  expect(state).toMatchObject({ paused: false, playbackRate: -1 });
+  expect(state.currentTime).toBeGreaterThan(state.duration - 2);
+  expect(state.currentTime).toBeLessThan(state.duration - 1);
+  expect(state.events).not.toContain("ratechange");
+});
