@@ -31,12 +31,13 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "format": "prettier --write .",
-    "test:audio": "node test/audio-glitch.spec.mjs",
-    "test:playback": "node test/playback-start.spec.mjs"
+    "test": "playwright test",
+    "test:audio": "playwright test audio-glitch",
+    "test:playback": "playwright test playback-start"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "media-chrome": "^4.2.3",
-    "playwright": "^1.63.0",
     "prettier": "^3.3.3",
     "typescript": "^5.6.3",
     "vite": "^5.4.10"

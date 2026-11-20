@@ -1,0 +1,36 @@
+import { defineConfig, devices } from "@playwright/test";
+
+const port = 5173;
+
+export default defineConfig({
+  testDir: "test",
+  testMatch: "*.spec.mjs",
+  // The audio tests record real-time playback, so give them some room.
+  timeout: 30_000,
+  // Audio is played (and recorded) in real time, so don't compete for the CPU.
+  fullyParallel: false,
+  workers: 1,
+  forbidOnly: !!process.env.CI,
+  retries: process.env.CI ? 1 : 0,
+  reporter: process.env.CI ? "github" : "list",
+  use: {
+    baseURL: `http://localhost:${port}/baby-video/`,
+    trace: "retain-on-failure"
+  },
+  projects: [
+    {
+      name: "chromium",
+      use: {
+        ...devices["Desktop Chrome"],
+        launchOptions: {
+          args: ["--autoplay-policy=no-user-gesture-required"]
+        }
+      }
+    }
+  ],
+  webServer: {
+    command: `npx vite --port ${port} --strictPort`,
+    url: `http://localhost:${port}/baby-video/`,
+    reuseExistingServer: !process.env.CI
+  }
+});

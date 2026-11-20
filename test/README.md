@@ -9,9 +9,14 @@ dropped or duplicated samples, phase jumps and decoder garbage all show up as
 spikes in that residual. Runs of digital silence are reported as gaps.
 
 ```sh
-npx vite --port 5173 &
-npm run test:audio
+npx playwright install chromium  # once
+npm test                         # all tests
+npm run test:audio               # only this test
 ```
+
+Playwright starts the vite dev server on port 5173 by itself (or reuses one
+that's already running). On failure, a trace is saved in `test-results/`;
+open it with `npx playwright show-trace <path>`.
 
 # Playback start test
 

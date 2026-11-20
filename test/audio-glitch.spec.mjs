@@ -9,11 +9,8 @@
 // duplicated samples, phase jumps or garbage from the decoder.
 // Reversing a sine wave gives a sine wave again, so the same check works for
 // reverse playback.
-//
-// Usage: npx vite --port 5173 &  node test/audio-glitch.spec.mjs
-import { chromium } from "playwright";
+import { test, expect } from "@playwright/test";
 
-const baseUrl = process.env.BASE_URL ?? "http://localhost:5173/baby-video/";
 const frequency = 440;
 // Residual above which we count a sample as a glitch. For a 0.5 amplitude sine
 // at 48 kHz, AAC coding noise stays well below this, while a single missing
@@ -22,7 +19,7 @@ const glitchThreshold = 0.02;
 // Shortest run of digital silence, in the middle of playback, that counts as a gap.
 const minGapSamples = 16;
 
-export function analyze(samples, sampleRate) {
+function analyze(samples, sampleRate) {
   // Trim silence before playback starts and after it stops.
   let first = samples.findIndex((x) => Math.abs(x) > 1e-3);
   let last = samples.findLastIndex((x) => Math.abs(x) > 1e-3);
@@ -60,74 +57,50 @@ export function analyze(samples, sampleRate) {
   return { activeSamples: last - first, glitches, gaps };
 }
 
-async function main() {
-  const browser = await chromium.launch({
-    args: ["--autoplay-policy=no-user-gesture-required"]
-  });
-  const page = await browser.newPage();
-  page.on("console", (msg) => {
-    if (msg.type() === "error") console.error("[page]", msg.text());
-  });
-  page.on("pageerror", (err) => console.error("[page]", err));
-  await page.goto(new URL("test/audio-glitch.html", baseUrl).href);
-  await page.waitForSelector("body[data-ready]", { timeout: 15000 });
-
-  const cases = [
-    { name: "forward", start: 1, playbackRate: 1, seconds: 4 },
-    { name: "reverse", start: 8.51, playbackRate: -1, seconds: 4 },
-    // Seeking exactly to a frame boundary (of both the 30fps video and the
-    // 1024-sample audio frames at 48kHz: 8 = 250 * 1024 / 48000).
-    {
-      name: "reverse from frame boundary",
-      start: 8,
-      playbackRate: -1,
-      seconds: 2
-    }
-  ];
-  let failed = false;
-  for (const testCase of cases) {
-    const result = await Promise.race([
-      page.evaluate((options) => window.recordPlayback(options), testCase),
-      new Promise((resolve) =>
-        setTimeout(() => resolve(undefined), (testCase.seconds + 10) * 1000)
-      )
-    ]);
-    if (result === undefined) {
-      failed = true;
-      console.log(
-        `FAIL ${testCase.name}: timed out (seek or play never completed)`
-      );
-      // The page is stuck, so start over with a fresh one.
-      await page.reload();
-      await page.waitForSelector("body[data-ready]", { timeout: 15000 });
-      continue;
-    }
-    const { samples, sampleRate } = result;
-    const { activeSamples, glitches, gaps } = analyze(samples, sampleRate);
-    const ok =
-      activeSamples > sampleRate && glitches.length === 0 && gaps.length === 0;
-    failed ||= !ok;
-    console.log(
-      `${ok ? "PASS" : "FAIL"} ${testCase.name}: ${(activeSamples / sampleRate).toFixed(2)}s of audio, ` +
-        `${glitches.length} glitches, ${gaps.length} gaps`
-    );
-    for (const g of glitches.slice(0, 15)) {
-      console.log(
-        `  glitch at ${g.start.toFixed(4)}s..${g.end.toFixed(4)}s, peak residual ${g.peak.toFixed(3)}`
-      );
-    }
-    if (glitches.length > 15)
-      console.log(`  ... and ${glitches.length - 15} more`);
-    for (const g of gaps.slice(0, 10)) {
-      console.log(
-        `  gap at ${g.at.toFixed(4)}s, ${g.samples} samples of silence`
-      );
-    }
+const cases = [
+  { name: "forward", start: 1, playbackRate: 1, seconds: 4 },
+  { name: "reverse", start: 8.51, playbackRate: -1, seconds: 4 },
+  // Seeking exactly to a frame boundary (of both the 30fps video and the
+  // 1024-sample audio frames at 48kHz: 8 = 250 * 1024 / 48000).
+  {
+    name: "reverse from frame boundary",
+    start: 8,
+    playbackRate: -1,
+    seconds: 2
   }
-  await browser.close();
-  process.exitCode = failed ? 1 : 0;
-}
+];
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  await main();
+for (const testCase of cases) {
+  test(`no glitches or gaps: ${testCase.name}`, async ({ page }) => {
+    test.setTimeout((testCase.seconds + 20) * 1000);
+    page.on("console", (msg) => {
+      if (msg.type() === "error") console.error("[page]", msg.text());
+    });
+    page.on("pageerror", (err) => console.error("[page]", err));
+    await page.goto("test/audio-glitch.html");
+    await page.waitForSelector("body[data-ready]");
+
+    const { samples, sampleRate } = await page.evaluate(
+      (options) => window.recordPlayback(options),
+      testCase
+    );
+    const { activeSamples, glitches, gaps } = analyze(samples, sampleRate);
+    const summary = {
+      seconds: Number((activeSamples / sampleRate).toFixed(2)),
+      glitches: glitches.slice(0, 15).map((g) => ({
+        start: Number(g.start.toFixed(4)),
+        end: Number(g.end.toFixed(4)),
+        peak: Number(g.peak.toFixed(3))
+      })),
+      gaps: gaps.slice(0, 10).map((g) => ({
+        at: Number(g.at.toFixed(4)),
+        samples: g.samples
+      }))
+    };
+    expect(activeSamples, "recorded at least 1s of audio").toBeGreaterThan(
+      sampleRate
+    );
+    expect(summary.glitches, "glitches").toEqual([]);
+    expect(summary.gaps, "gaps").toEqual([]);
+  });
 }
