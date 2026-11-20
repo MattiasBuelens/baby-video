@@ -13,5 +13,5 @@ This is purely for demonstration purposes. Don't use this in production, use a r
 
 ## Talks
 
-- [Demuxed 2022: Baby's first HTML5 video element](https://youtu.be/OBhlTcllq_E?si=5OD36WN5T7OoptzB)
-- Demuxed 2023: The curious player of Benjamin Button: reverse video on the web
+- Demuxed 2022: Baby's first HTML5 video element ([blog post](https://mattias.buelens.com/post/talk-baby-video), [video](https://youtu.be/OBhlTcllq_E?si=5OD36WN5T7OoptzB))
+- Demuxed 2023: The curious player of Benjamin Button: reverse video on the web ([blog post](https://mattias.buelens.com/post/talk-reverse-video))
