@@ -5,6 +5,8 @@ export interface BufferTrack {
   label: string;
   className: string;
   buffered: () => TimeRanges;
+  /** Fires an `updateend` event whenever `buffered` may have changed. */
+  target?: EventTarget;
 }
 
 /** How many seconds of the timeline the zoomed view shows. */
@@ -15,7 +17,12 @@ export function sourceBufferTrack(
   className: string,
   sourceBuffer: BabySourceBuffer
 ): BufferTrack {
-  return { label, className, buffered: () => sourceBuffer.buffered };
+  return {
+    label,
+    className,
+    buffered: () => sourceBuffer.buffered,
+    target: sourceBuffer
+  };
 }
 
 export function setupBufferView(
@@ -64,9 +71,34 @@ export function setupBufferView(
       renderAxis(axis, windowStart, windowStart + windowSize, duration);
       renderSummary(summary, video, tracks[0].buffered());
     }
-    requestAnimationFrame(render);
   }
-  requestAnimationFrame(render);
+
+  // Only redraw when the playhead or a buffer changes,
+  // coalescing multiple events into a single redraw per frame.
+  let renderScheduled = false;
+  function scheduleRender() {
+    if (renderScheduled) return;
+    renderScheduled = true;
+    requestAnimationFrame(() => {
+      renderScheduled = false;
+      render();
+    });
+  }
+  for (const type of [
+    "durationchange",
+    "emptied",
+    "progress",
+    "ratechange",
+    "seeked",
+    "seeking",
+    "timeupdate"
+  ]) {
+    video.addEventListener(type, scheduleRender);
+  }
+  for (const track of tracks) {
+    track.target?.addEventListener("updateend", scheduleRender);
+  }
+  scheduleRender();
 }
 
 function createRow(parent: HTMLElement, track: BufferTrack): HTMLElement {
