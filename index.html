@@ -3,53 +3,105 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
     <title>Baby's first HTML5 &lt;video&gt; element</title>
+    <link rel="stylesheet" href="./demo/style.css" />
     <script type="module" src="./src/index.ts"></script>
     <script type="module" src="./demo/app.ts"></script>
   </head>
   <body>
-    <media-controller
-      style="max-width: 100%; max-height: 100%; aspect-ratio: 16 / 9"
-    >
-      <baby-video slot="media"></baby-video>
-      <media-loading-indicator
-        slot="centered-chrome"
-        noautohide
-      ></media-loading-indicator>
-      <media-control-bar>
-        <media-play-button></media-play-button>
-        <media-mute-button></media-mute-button>
-        <media-volume-range></media-volume-range>
-        <media-time-display showduration></media-time-display>
-        <media-time-range></media-time-range>
-        <media-playback-rate-button rates="-1 1"></media-playback-rate-button>
-        <media-fullscreen-button></media-fullscreen-button>
-      </media-control-bar>
-    </media-controller>
+    <header>
+      <h1>Baby's first HTML5 <code>&lt;video&gt;</code> element</h1>
+      <p class="intro">
+        <code>&lt;baby-video&gt;</code> is a from-scratch re-implementation of
+        the <code>&lt;video&gt;</code> element, built on WebCodecs, Web Audio
+        and a hand-written <code>MediaSource</code>. It's here to show how video
+        playback works inside a browser, including playing video backwards.
+      </p>
+      <nav class="links">
+        <a href="https://github.com/MattiasBuelens/baby-video"
+          >Source on GitHub</a
+        >
+        <span
+          >Demuxed 2022: Baby's first HTML5 video element (<a
+            href="https://mattias.buelens.com/post/talk-baby-video"
+            >blog post</a
+          >,
+          <a
+            href="https://www.youtube.com/watch?v=OBhlTcllq_E&amp;list=PLkyaYNWEKcOf98lZxnCcL6y7ZIVU3oSYO&amp;index=7"
+            >video</a
+          >)</span
+        >
+        <span
+          >Demuxed 2023: The curious player of Benjamin Button (<a
+            href="https://mattias.buelens.com/post/talk-reverse-video"
+            >blog post</a
+          >,
+          <a
+            href="https://www.youtube.com/watch?v=0sYeEpR10sY&amp;list=PLkyaYNWEKcOesxC4VpHJtbjnzuN6r1NGg&amp;index=15"
+            >video</a
+          >)</span
+        >
+      </nav>
+    </header>
 
-    <p>
-      <a href="https://github.com/MattiasBuelens/baby-video"
-        >Source code on GitHub</a
-      >
-    </p>
+    <main>
+      <section class="player" aria-label="Player">
+        <media-controller>
+          <baby-video slot="media"></baby-video>
+          <media-loading-indicator
+            slot="centered-chrome"
+            noautohide
+          ></media-loading-indicator>
+          <media-playback-rate-menu
+            hidden
+            anchor="auto"
+            rates="-2 -1 -0.5 0.5 1 2"
+          ></media-playback-rate-menu>
+          <media-control-bar>
+            <media-play-button></media-play-button>
+            <media-mute-button></media-mute-button>
+            <media-volume-range></media-volume-range>
+            <media-time-display showduration></media-time-display>
+            <media-time-range></media-time-range>
+            <media-playback-rate-menu-button></media-playback-rate-menu-button>
+            <media-fullscreen-button></media-fullscreen-button>
+          </media-control-bar>
+        </media-controller>
 
-    <style>
-      media-mute-button + media-volume-range {
-        width: 0;
-        overflow: hidden;
-        padding-left: 0;
-        padding-right: 0;
+        <div class="direction-buttons" role="group" aria-label="Direction">
+          <button type="button" data-rate="-1" class="primary">
+            ⏪ Play backwards
+          </button>
+          <button type="button" data-rate="1">▶️ Play forwards</button>
+        </div>
+      </section>
 
-        /* Set the internal width so it reveals, not grows */
-        --media-range-track-width: 70px;
-        transition: width 0.2s ease-in;
-      }
+      <section class="panel buffer-view" aria-labelledby="buffer-heading">
+        <h2 id="buffer-heading">Buffer</h2>
+        <p class="hint">
+          The demo keeps 30 seconds buffered in the direction of playback and 10
+          seconds behind. Switch direction and watch the window flip.
+        </p>
+        <p class="buffer-summary" aria-live="off"></p>
+        <h3>Around the playhead</h3>
+        <div class="buffer-zoomed"></div>
+        <div class="buffer-axis"></div>
+        <h3>Whole video</h3>
+        <div class="buffer-overview"></div>
+      </section>
 
-      /* Expand volume control when hovered or focused */
-      media-mute-button:is(:hover, :focus, :focus-within) + media-volume-range,
-      media-mute-button + media-volume-range:is(:hover, :focus, :focus-within) {
-        width: var(--media-range-track-width);
-      }
-    </style>
+      <section class="panel event-log" aria-labelledby="events-heading">
+        <div class="panel-header">
+          <h2 id="events-heading">Events</h2>
+          <label>
+            <input type="checkbox" name="show-timeupdate" />
+            timeupdate
+          </label>
+          <button type="button" name="clear">Clear</button>
+        </div>
+        <ol class="event-log-list"></ol>
+      </section>
+    </main>
   </body>
 </html>
