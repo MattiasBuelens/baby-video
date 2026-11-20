@@ -5,8 +5,11 @@ export interface BufferTrack {
   label: string;
   className: string;
   buffered: () => TimeRanges;
-  /** Fires an `updateend` event whenever `buffered` may have changed. */
-  target?: EventTarget;
+  /**
+   * The SourceBuffer behind this track, if any.
+   * The view listens for its `updateend` events to redraw after an append or remove.
+   */
+  sourceBuffer?: BabySourceBuffer;
 }
 
 /** How many seconds of the timeline the zoomed view shows. */
@@ -21,7 +24,7 @@ export function sourceBufferTrack(
     label,
     className,
     buffered: () => sourceBuffer.buffered,
-    target: sourceBuffer
+    sourceBuffer
   };
 }
 
@@ -96,7 +99,7 @@ export function setupBufferView(
     video.addEventListener(type, scheduleRender);
   }
   for (const track of tracks) {
-    track.target?.addEventListener("updateend", scheduleRender);
+    track.sourceBuffer?.addEventListener("updateend", scheduleRender);
   }
   scheduleRender();
 }
