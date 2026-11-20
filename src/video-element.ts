@@ -497,9 +497,21 @@ export class BabyVideoElement extends HTMLElement {
       // That extrapolation is exact for as long as the effective rate stays
       // constant, and the effective rate is 0 whenever the worklet is starved or
       // stopped, so the clock stalls rather than running away.
-      let newTime = this.#audioSink?.getPosition();
+      // Only follow the audio clock where there is audio to play. Tracks can
+      // end at different times: past the end of the audio (e.g. right after
+      // seeking to the very end in reverse), the sink is starved and its clock
+      // stands still, so use the wall clock until we reach the audio.
+      let newTime = this.#hasBufferedFrameAtTime(
+        this.#srcObject
+          ? getActiveAudioTrackBuffer(this.#srcObject)
+          : undefined,
+        Math.floor(1e6 * this.#currentTime)
+      )
+        ? this.#audioSink?.getPosition()
+        : undefined;
       if (newTime === undefined) {
-        // There's no audio track, or no audio clock to sync with (yet).
+        // There's no audio track, no audio at current time,
+        // or no audio clock to sync with (yet).
         const elapsedTime = Math.max(0, (now - this.#lastAdvanceTime) / 1000);
         newTime = this.#currentTime + this.#playbackRate * elapsedTime;
       } else if (this.#playbackRate >= 0) {

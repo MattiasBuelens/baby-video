@@ -222,10 +222,16 @@ async function trackBufferLoop(
       video.currentTime
     );
     const forward = video.playbackRate >= 0;
+    // The buffered range may not start or end exactly at a segment boundary
+    // (e.g. when frames are offset by a B-frame reordering delay), so snap its
+    // edge to the nearest boundary and pick the segment right next to it.
+    const segmentDuration = segmentForTime(0)!.endTime;
     const nextTime = currentRange
       ? forward
-        ? currentRange[1]
-        : currentRange[0] - 0.001
+        ? (Math.round(currentRange[1] / segmentDuration) + 0.5) *
+          segmentDuration
+        : (Math.round(currentRange[0] / segmentDuration) - 0.5) *
+          segmentDuration
       : video.currentTime;
     const nextSegment = segmentForTime(nextTime)!;
     // Remove old buffer before/after current time
