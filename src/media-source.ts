@@ -201,6 +201,10 @@ export class BabyMediaSource extends EventTarget {
       this.#durationChange(largestEndTime);
       // 3.2. Notify the media element that it now has all of the media data.
       notifyEndOfStream(this.#mediaElement!);
+      // The buffered ranges now extend to the end of the longest track,
+      // so the ready state may have changed. Without this, an element waiting
+      // for data at the very end would keep waiting after the stream ends.
+      this.#checkBuffer();
     } else if (error === "network") {
       // TODO
     } else if (error === "decode") {

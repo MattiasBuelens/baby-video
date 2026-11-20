@@ -13,12 +13,22 @@ npx vite --port 5173 &
 npm run test:audio
 ```
 
+# Playback start test
+
+`npm run test:playback` checks reverse playback around the start of the media:
+seeking to 0, playing backwards until 0 (which pauses, without `ended`), and
+calling `play()` there (which restarts from the end, keeping the playback rate).
+It uses the same test page and fixtures.
+
 The fixtures were generated with:
 
 ```sh
 ffmpeg -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=10" -af "volume=0.5" \
   -c:a aac -b:a 192k -ac 2 -movflags frag_keyframe+empty_moov+default_base_moof \
   -frag_duration 1000000 sine-440.m4a
+# Negative composition offsets make the first video frame start at 0 (instead of
+# after the B-frame reordering delay), since we don't apply edit lists.
 ffmpeg -f lavfi -i "testsrc=size=320x180:rate=30:duration=10" -c:v libx264 -profile:v high \
-  -pix_fmt yuv420p -g 30 -movflags frag_keyframe+empty_moov+default_base_moof video.m4v
+  -pix_fmt yuv420p -g 30 -avoid_negative_ts disabled -use_editlist 0 \
+  -movflags frag_keyframe+empty_moov+default_base_moof+negative_cts_offsets video.m4v
 ```

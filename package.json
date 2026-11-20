@@ -31,7 +31,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "format": "prettier --write .",
-    "test:audio": "node test/audio-glitch.spec.mjs"
+    "test:audio": "node test/audio-glitch.spec.mjs",
+    "test:playback": "node test/playback-start.spec.mjs"
   },
   "devDependencies": {
     "media-chrome": "^4.2.3",
