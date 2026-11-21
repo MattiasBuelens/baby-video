@@ -8,6 +8,29 @@ import { MediaPipeline, type MediaPipelineHost } from "./media-pipeline";
 const template = document.createElement("template");
 template.innerHTML = `<style>${stylesheet}</style>`;
 
+// Internal accessors for BabyVideoElementPipelineHost.
+let getPipelineHost: (
+  element: BabyVideoElement
+) => MediaPipelineHost | undefined;
+let updateReadyState: (
+  element: BabyVideoElement,
+  readyState: MediaReadyState
+) => void;
+let updateDuration: (element: BabyVideoElement, duration: number) => void;
+let notifyProgress: (element: BabyVideoElement) => void;
+let notifyEndOfStream: (element: BabyVideoElement) => void;
+let onTimeUpdate: (
+  element: BabyVideoElement,
+  currentTime: number,
+  isNormalPlayback: boolean
+) => void;
+let onSeekComplete: (element: BabyVideoElement) => void;
+let updateSize: (
+  element: BabyVideoElement,
+  width: number,
+  height: number
+) => void;
+
 // A partial re-implementation of the HTML <video> element.
 //
 // This class implements the HTML media element state machine: its attributes,
@@ -189,7 +212,7 @@ export class BabyVideoElement extends HTMLElement {
     this.#lastTimeUpdate = 0;
     queueTask(() => this.dispatchEvent(new Event("emptied")));
     if (srcObject) {
-      this.#pipelineHost = this.#createPipelineHost();
+      this.#pipelineHost = new BabyVideoElementPipelineHost(this);
       this.#pipeline = new MediaPipeline(
         srcObject,
         this.#pipelineHost,
@@ -235,37 +258,6 @@ export class BabyVideoElement extends HTMLElement {
     this.#internalPlay();
     // 5. Return promise.
     return deferred.promise;
-  }
-
-  // The view of this element that a media pipeline reports to.
-  // Each pipeline gets its own host, so that a detached pipeline
-  // can no longer affect this element.
-  #createPipelineHost(): MediaPipelineHost {
-    const isCurrent = () => this.#pipelineHost === host;
-    const host: MediaPipelineHost = {
-      onReadyStateChange: (readyState) => {
-        if (isCurrent()) this.#updateReadyState(readyState);
-      },
-      onDurationChange: (duration) => {
-        if (isCurrent()) this.#updateDuration(duration);
-      },
-      onProgress: () => {
-        if (isCurrent()) this.#notifyProgress();
-      },
-      onEndOfStream: () => {
-        if (isCurrent()) this.#notifyEndOfStream();
-      },
-      onTimeUpdate: (currentTime, isNormalPlayback) => {
-        if (isCurrent()) this.#onTimeUpdate(currentTime, isNormalPlayback);
-      },
-      onSeekComplete: () => {
-        if (isCurrent()) this.#onSeekComplete();
-      },
-      onResize: (width, height) => {
-        if (isCurrent()) this.#updateSize(width, height);
-      }
-    };
-    return host;
   }
 
   #takePendingPlayPromises(): Array<Deferred<void>> {
@@ -667,6 +659,64 @@ export class BabyVideoElement extends HTMLElement {
 
   #notifyEndOfStream(): void {
     this.#isEndOfStream = true;
+  }
+
+  static {
+    getPipelineHost = (element) => element.#pipelineHost;
+    updateReadyState = (element, readyState) =>
+      element.#updateReadyState(readyState);
+    updateDuration = (element, duration) => element.#updateDuration(duration);
+    notifyProgress = (element) => element.#notifyProgress();
+    notifyEndOfStream = (element) => element.#notifyEndOfStream();
+    onTimeUpdate = (element, currentTime, isNormalPlayback) =>
+      element.#onTimeUpdate(currentTime, isNormalPlayback);
+    onSeekComplete = (element) => element.#onSeekComplete();
+    updateSize = (element, width, height) => element.#updateSize(width, height);
+  }
+}
+
+// The view of a BabyVideoElement that a media pipeline reports to.
+// Each pipeline gets its own host, so that a detached pipeline
+// can no longer affect the element.
+class BabyVideoElementPipelineHost implements MediaPipelineHost {
+  readonly #element: BabyVideoElement;
+
+  constructor(element: BabyVideoElement) {
+    this.#element = element;
+  }
+
+  #isCurrent(): boolean {
+    return getPipelineHost(this.#element) === this;
+  }
+
+  onReadyStateChange(readyState: MediaReadyState): void {
+    if (this.#isCurrent()) updateReadyState(this.#element, readyState);
+  }
+
+  onDurationChange(duration: number): void {
+    if (this.#isCurrent()) updateDuration(this.#element, duration);
+  }
+
+  onProgress(): void {
+    if (this.#isCurrent()) notifyProgress(this.#element);
+  }
+
+  onEndOfStream(): void {
+    if (this.#isCurrent()) notifyEndOfStream(this.#element);
+  }
+
+  onTimeUpdate(currentTime: number, isNormalPlayback: boolean): void {
+    if (this.#isCurrent()) {
+      onTimeUpdate(this.#element, currentTime, isNormalPlayback);
+    }
+  }
+
+  onSeekComplete(): void {
+    if (this.#isCurrent()) onSeekComplete(this.#element);
+  }
+
+  onResize(width: number, height: number): void {
+    if (this.#isCurrent()) updateSize(this.#element, width, height);
   }
 }
 
