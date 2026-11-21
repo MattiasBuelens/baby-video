@@ -36,6 +36,13 @@ export function sumWith<T>(array: T[], cb: (element: T) => number): number {
   return array.reduce((total, element) => total + cb(element), 0);
 }
 
+// The current time as an absolute high resolution time, in milliseconds.
+// Unlike performance.now(), this can be compared across a window and its
+// workers, which each have their own time origin.
+export function getAbsoluteTime(): number {
+  return performance.timeOrigin + performance.now();
+}
+
 export function queueTask(fn: () => void): void {
   setTimeout(fn, 0);
 }

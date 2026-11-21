@@ -3,6 +3,7 @@ import type {
   AudioSinkInboundMessage,
   AudioSinkProcessorName
 } from "./audio-sink-messages";
+import { getAbsoluteTime } from "./util";
 
 const processorName: AudioSinkProcessorName = "audio-sink";
 
@@ -28,10 +29,6 @@ export interface AudioOutputInit {
   readonly port: MessagePort;
   readonly gain: number;
   readonly onClock: (snapshot: AudioClockSnapshot) => void;
-}
-
-export function getAbsoluteTime(): number {
-  return performance.timeOrigin + performance.now();
 }
 
 // The main thread side of the audio output: the AudioContext and its audio

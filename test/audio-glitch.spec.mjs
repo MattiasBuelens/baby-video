@@ -77,7 +77,9 @@ for (const testCase of cases) {
       if (msg.type() === "error") console.error("[page]", msg.text());
     });
     page.on("pageerror", (err) => console.error("[page]", err));
-    await page.goto("test/audio-glitch.html");
+    await page.goto(
+      `test/audio-glitch.html${test.info().project.metadata.query ?? ""}`
+    );
     await page.waitForSelector("body[data-ready]");
 
     const { samples, sampleRate } = await page.evaluate(

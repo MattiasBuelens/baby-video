@@ -76,21 +76,45 @@ function setRecording(recording: boolean) {
 }
 
 const video = document.querySelector<BabyVideoElement>("baby-video")!;
-const mediaSource = new BabyMediaSource();
-video.srcObject = mediaSource;
-if (mediaSource.readyState !== "open") {
-  await waitForEvent(mediaSource, "sourceopen");
+if (new URLSearchParams(location.search).has("worker")) {
+  // Create the MediaSource in a dedicated worker, see media-source-worker.ts.
+  const worker = new Worker(
+    new URL("./media-source-worker.ts", import.meta.url),
+    {
+      type: "module"
+    }
+  );
+  await new Promise<void>((resolve) => {
+    worker.addEventListener("message", (event: MessageEvent) => {
+      if (event.data.type === "handle") {
+        video.srcObject = event.data.handle;
+      } else if (event.data.type === "ready") {
+        resolve();
+      }
+    });
+  });
+  // The worker has appended all media data, but the element only learns about
+  // that one message later.
+  if (video.readyState < 4) {
+    await waitForEvent(video, "canplaythrough");
+  }
+} else {
+  const mediaSource = new BabyMediaSource();
+  video.srcObject = mediaSource;
+  if (mediaSource.readyState !== "open") {
+    await waitForEvent(mediaSource, "sourceopen");
+  }
+  async function append(type: string, url: string) {
+    const sourceBuffer = mediaSource.addSourceBuffer(type);
+    sourceBuffer.appendBuffer(await (await fetch(url)).arrayBuffer());
+    await waitForEvent(sourceBuffer, "updateend");
+  }
+  await Promise.all([
+    append('video/mp4; codecs="avc1.64000d"', videoUrl),
+    append('audio/mp4; codecs="mp4a.40.2"', audioUrl)
+  ]);
+  mediaSource.endOfStream();
 }
-async function append(type: string, url: string) {
-  const sourceBuffer = mediaSource.addSourceBuffer(type);
-  sourceBuffer.appendBuffer(await (await fetch(url)).arrayBuffer());
-  await waitForEvent(sourceBuffer, "updateend");
-}
-await Promise.all([
-  append('video/mp4; codecs="avc1.64000d"', videoUrl),
-  append('audio/mp4; codecs="mp4a.40.2"', audioUrl)
-]);
-mediaSource.endOfStream();
 
 declare global {
   interface Window {

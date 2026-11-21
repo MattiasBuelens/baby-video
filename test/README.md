@@ -25,6 +25,22 @@ seeking to 0, playing backwards until 0 (which pauses, without `ended`), and
 calling `play()` there (which restarts from the end, keeping the playback rate).
 It uses the same test page and fixtures.
 
+# Video render test
+
+`test/video-render.spec.mjs` checks that video frames reach the screen while
+playing. It compares screenshots, since the page can't read pixels from a
+canvas whose control was transferred to an `OffscreenCanvas`.
+
+# Worker mode
+
+Each of the tests above also runs in the `chromium-worker` project, which opens
+the test page with `?worker`. The `BabyMediaSource` (and with it, the media
+pipeline) then lives in a dedicated worker (`media-source-worker.ts`), and is
+attached through its handle. `test/handle.spec.mjs` checks the handle itself:
+transfer once, attach once, and detaching closes the MediaSource in the worker.
+
+Run only one mode with `npx playwright test --project chromium-worker`.
+
 The fixtures were generated with:
 
 ```sh

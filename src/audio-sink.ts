@@ -3,7 +3,8 @@ import type {
   AudioSinkInboundMessage,
   AudioSinkStatusMessage
 } from "./audio-sink-messages";
-import { type AudioClockSnapshot, getAbsoluteTime } from "./audio-output";
+import type { AudioClockSnapshot } from "./audio-output";
+import { getAbsoluteTime } from "./util";
 
 export interface BabyAudioSinkInit {
   // The port to the audio worklet, see AudioOutput.

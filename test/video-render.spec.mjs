@@ -3,7 +3,9 @@ import { test, expect } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
   page.on("pageerror", (err) => console.error("[page]", err));
-  await page.goto("test/audio-glitch.html");
+  await page.goto(
+    `test/audio-glitch.html${test.info().project.metadata.query ?? ""}`
+  );
   await page.waitForSelector("body[data-ready]");
 });
 

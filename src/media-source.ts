@@ -10,6 +10,8 @@ import {
 import { queueTask } from "./util";
 import { AudioTrackBuffer, VideoTrackBuffer } from "./track-buffer";
 import { setEndTimeOnLastRange, TimeRanges } from "./time-ranges";
+import { BabyMediaSourceHandle } from "./media-source-handle";
+import { MediaPipelineEndpoint } from "./media-pipeline-endpoint";
 
 export type MediaSourceReadyState = "closed" | "ended" | "open";
 
@@ -44,6 +46,7 @@ export class BabyMediaSource extends EventTarget {
   #mediaElement: MediaSourceAttachment | undefined;
   #readyState: MediaSourceReadyState = "closed";
   #sourceBuffers: BabySourceBuffer[] = [];
+  #handle: BabyMediaSourceHandle | undefined;
 
   get duration(): number {
     // https://w3c.github.io/media-source/#dom-mediasource-duration
@@ -84,6 +87,48 @@ export class BabyMediaSource extends EventTarget {
 
   get sourceBuffers(): readonly BabySourceBuffer[] {
     return this.#sourceBuffers;
+  }
+
+  // https://w3c.github.io/media-source/#dom-mediasource-handle
+  // Returns a handle to attach this MediaSource to a <baby-video> element on
+  // another thread, see BabyMediaSourceHandle. Always the same handle.
+  // (The real MediaSource only exposes this in a dedicated worker.)
+  get handle(): BabyMediaSourceHandle {
+    if (this.#handle === undefined) {
+      // The media pipeline lives here, next to the MediaSource.
+      // The element on the other end of the port tells it when to attach.
+      const { port1, port2 } = new MessageChannel();
+      new MediaPipelineEndpoint(this, port2);
+      this.#handle = new BabyMediaSourceHandle(port1);
+    }
+    return this.#handle;
+  }
+
+  // https://w3c.github.io/media-source/#dom-mediasource-canconstructindedicatedworker
+  // Whether a BabyMediaSource in a dedicated worker can be attached to a
+  // <baby-video> element. The media pipeline then runs in that worker too,
+  // so it needs WebCodecs and OffscreenCanvas (with requestAnimationFrame)
+  // there. Can be called from both the window and the worker.
+  static get canConstructInDedicatedWorker(): boolean {
+    if (
+      typeof OffscreenCanvas !== "function" ||
+      typeof VideoDecoder !== "function" ||
+      typeof AudioDecoder !== "function"
+    ) {
+      return false;
+    }
+    if (typeof HTMLCanvasElement === "function") {
+      // In the window: we must be able to start a worker,
+      // and hand it the element's canvas.
+      return (
+        typeof Worker === "function" &&
+        typeof HTMLCanvasElement.prototype.transferControlToOffscreen ===
+          "function"
+      );
+    } else {
+      // In the worker: the pipeline renders frames with requestAnimationFrame.
+      return typeof requestAnimationFrame === "function";
+    }
   }
 
   static isTypeSupported(type: string): boolean {

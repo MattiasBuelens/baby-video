@@ -9,6 +9,11 @@ import type {
 } from "./media-pipeline";
 import { MediaPipelineEndpoint } from "./media-pipeline-endpoint";
 import { MediaPipelineProxy } from "./media-pipeline-proxy";
+import type { BabyMediaSourceHandle } from "./media-source-handle";
+
+// Ports of handles that were already attached to an element.
+// A handle can only be used once.
+const usedHandlePorts = new WeakSet<MessagePort>();
 import { AudioOutput } from "./audio-output";
 
 const template = document.createElement("template");
@@ -49,7 +54,9 @@ let createAudioOutput: (
 // rendering and the playback clock) lives in the MediaPipeline, which reports
 // back through MediaPipelineHost.
 export class BabyVideoElement extends HTMLElement {
-  readonly #canvas: HTMLCanvasElement;
+  #canvas: HTMLCanvasElement;
+  // Whether #canvas has transferred control to an OffscreenCanvas.
+  #canvasTransferred: boolean = false;
 
   #currentTime: number = 0;
   #duration: number = NaN;
@@ -60,7 +67,7 @@ export class BabyVideoElement extends HTMLElement {
   #played: TimeRanges = new TimeRanges([]);
   #readyState: MediaReadyState = MediaReadyState.HAVE_NOTHING;
   #seeking: boolean = false;
-  #srcObject: BabyMediaSource | undefined;
+  #srcObject: BabyMediaSource | BabyMediaSourceHandle | undefined;
   #volume: number = 1;
   #videoWidth: number;
   #videoHeight: number;
@@ -87,9 +94,7 @@ export class BabyVideoElement extends HTMLElement {
     // The default object size is a width of 300 CSS pixels and a height of 150 CSS pixels.
     this.#videoWidth = 300;
     this.#videoHeight = 150;
-    this.#canvas = document.createElement("canvas");
-    this.#canvas.width = 300;
-    this.#canvas.height = 150;
+    this.#canvas = this.#createCanvas();
     shadow.appendChild(this.#canvas);
 
     const canvasContext = this.#canvas.getContext("2d")!;
@@ -104,6 +109,38 @@ export class BabyVideoElement extends HTMLElement {
     ) {
       throw new Error(`<baby-video>: This browser does not support WebCodecs.`);
     }
+  }
+
+  #createCanvas(): HTMLCanvasElement {
+    const canvas = document.createElement("canvas");
+    canvas.width = 300;
+    canvas.height = 150;
+    return canvas;
+  }
+
+  // Replaces our canvas with a fresh one.
+  #replaceCanvas(): HTMLCanvasElement {
+    const canvas = this.#createCanvas();
+    this.#canvas.replaceWith(canvas);
+    this.#canvas = canvas;
+    this.#canvasTransferred = false;
+    return canvas;
+  }
+
+  // Gives a media pipeline on the main thread our canvas to render to.
+  #getCanvas(): HTMLCanvasElement {
+    // A canvas that transferred control to an OffscreenCanvas
+    // can no longer be drawn to from here.
+    return this.#canvasTransferred ? this.#replaceCanvas() : this.#canvas;
+  }
+
+  // Gives a media pipeline in a worker a canvas to render to.
+  // Once a canvas has transferred control to an OffscreenCanvas,
+  // it cannot be transferred again, so always start from a fresh one.
+  #transferCanvas(): OffscreenCanvas {
+    const offscreen = this.#replaceCanvas().transferControlToOffscreen();
+    this.#canvasTransferred = true;
+    return offscreen;
   }
 
   connectedCallback(): void {
@@ -203,11 +240,35 @@ export class BabyVideoElement extends HTMLElement {
     return this.#seeking;
   }
 
-  get srcObject(): BabyMediaSource | undefined {
+  get srcObject(): BabyMediaSource | BabyMediaSourceHandle | undefined {
     return this.#srcObject;
   }
 
-  set srcObject(srcObject: BabyMediaSource | undefined) {
+  // Accepts a BabyMediaSource on the main thread, or a BabyMediaSourceHandle
+  // of a BabyMediaSource in a dedicated worker.
+  set srcObject(
+    srcObject: BabyMediaSource | BabyMediaSourceHandle | undefined | null
+  ) {
+    srcObject ??= undefined;
+    if (
+      srcObject !== undefined &&
+      !(srcObject instanceof BabyMediaSource) &&
+      !(srcObject.port instanceof MessagePort)
+    ) {
+      throw new TypeError(
+        "srcObject must be a BabyMediaSource or a BabyMediaSourceHandle"
+      );
+    }
+    if (
+      srcObject !== undefined &&
+      !(srcObject instanceof BabyMediaSource) &&
+      usedHandlePorts.has(srcObject.port)
+    ) {
+      throw new DOMException(
+        "This BabyMediaSourceHandle was already used",
+        "InvalidStateError"
+      );
+    }
     this.#pipeline?.detach();
     this.#pipeline = undefined;
     this.#pipelineHost = undefined;
@@ -232,13 +293,25 @@ export class BabyVideoElement extends HTMLElement {
     if (srcObject) {
       this.#pipelineHost = new BabyVideoElementPipelineHost(this);
       // The element only ever talks to the pipeline through a message port.
-      // Here, the pipeline lives on the main thread, next to the MediaSource.
-      const { port1, port2 } = new MessageChannel();
-      new MediaPipelineEndpoint(srcObject, port2).attach(
-        this.#canvas,
-        this.#playbackRate
-      );
-      this.#pipeline = new MediaPipelineProxy(port1, this.#pipelineHost);
+      // The pipeline lives next to the MediaSource.
+      if (srcObject instanceof BabyMediaSource) {
+        // The MediaSource is right here, on the main thread,
+        // so the pipeline can render to our own canvas directly.
+        const { port1, port2 } = new MessageChannel();
+        new MediaPipelineEndpoint(srcObject, port2).attach(
+          this.#getCanvas(),
+          this.#playbackRate
+        );
+        this.#pipeline = new MediaPipelineProxy(port1, this.#pipelineHost);
+      } else {
+        // The MediaSource is in a worker, at the other end of the handle's port.
+        usedHandlePorts.add(srcObject.port);
+        this.#pipeline = new MediaPipelineProxy(
+          srcObject.port,
+          this.#pipelineHost
+        );
+        this.#pipeline.attach(this.#transferCanvas(), this.#playbackRate);
+      }
     }
   }
 
