@@ -270,6 +270,7 @@ export class MediaPipeline implements MediaSourceAttachment {
     this.#host.onProgress();
   }
 
+  // e.g. after https://w3c.github.io/media-source/#dfn-coded-frame-removal
   notifyBufferedChange(): void {
     this.#host.onBufferedChange();
   }

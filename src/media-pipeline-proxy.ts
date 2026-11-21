@@ -29,6 +29,10 @@ export class MediaPipelineProxy {
     };
   }
 
+  // https://w3c.github.io/media-source/#htmlmediaelement-extensions-buffered
+  // The MediaSource computes the buffered ranges, and the pipeline sends them
+  // whenever they change. Like the spec's cross-context attachment (for a
+  // MediaSource in a worker), the element may see them a little late.
   get buffered(): TimeRanges {
     return this.#buffered;
   }
@@ -57,6 +61,7 @@ export class MediaPipelineProxy {
     this.#post({ type: "set-playback-rate", playbackRate });
   }
 
+  // https://html.spec.whatwg.org/multipage/media.html#dom-media-seek
   seek(time: number): void {
     // Any playback position reported before the pipeline sees this seek
     // is stale.
@@ -68,6 +73,7 @@ export class MediaPipelineProxy {
     this.#post({ type: "audio-clock", snapshot });
   }
 
+  // https://w3c.github.io/media-source/#mediasource-detach
   detach(): void {
     this.#post({ type: "detach" });
     this.#closed = true;

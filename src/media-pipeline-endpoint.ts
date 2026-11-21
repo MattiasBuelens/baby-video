@@ -37,6 +37,7 @@ export class MediaPipelineEndpoint implements MediaPipelineHost {
   }
 
   // Attaches the MediaSource to the element, and creates the pipeline.
+  // https://w3c.github.io/media-source/#mediasource-attach
   // On the main thread, the element calls this directly with its own canvas.
   // From a worker, it sends an "attach" message with an OffscreenCanvas.
   attach(canvas: MediaPipelineCanvas, playbackRate: number): void {
@@ -80,6 +81,7 @@ export class MediaPipelineEndpoint implements MediaPipelineHost {
     }
   }
 
+  // https://w3c.github.io/media-source/#mediasource-detach
   #close(): void {
     this.#closed = true;
     this.#pipeline?.detach();
@@ -97,6 +99,7 @@ export class MediaPipelineEndpoint implements MediaPipelineHost {
     this.#port.postMessage(message, transfer ?? []);
   }
 
+  // https://w3c.github.io/media-source/#htmlmediaelement-extensions-buffered
   #syncBuffered(): void {
     const ranges = getBuffered(this.#mediaSource).toArray();
     if (!areRangesEqual(ranges, this.#lastBuffered)) {

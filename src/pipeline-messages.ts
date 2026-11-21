@@ -30,6 +30,7 @@ export interface PipelineSetPlaybackRateMessage {
   readonly playbackRate: number;
 }
 
+// https://html.spec.whatwg.org/multipage/media.html#dom-media-seek (steps 11 and 12)
 export interface PipelineSeekMessage {
   readonly type: "seek";
   // Identifies this seek. Replies tagged with an older epoch are stale.
@@ -72,6 +73,7 @@ export interface PipelineProgressMessage {
   readonly type: "progress";
 }
 
+// https://w3c.github.io/media-source/#htmlmediaelement-extensions-buffered
 export interface PipelineBufferedMessage {
   readonly type: "buffered";
   // The new HTMLMediaElement.buffered ranges, in seconds.
