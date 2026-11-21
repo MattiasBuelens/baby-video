@@ -172,6 +172,15 @@ export async function startBuffering(
   }
 
   const forwardBufferSize = 30;
+  // Appending to (or removing from) a SourceBuffer re-opens an ended
+  // MediaSource. Until we end it again, the buffered ranges end where the
+  // *shortest* track ends, so if playback gets there in the meantime, it
+  // stalls right before it would loop. So when looping, stop touching the
+  // SourceBuffers this many seconds before the jump. (The fetch for the next
+  // segment can take a while, and its append comes after that.)
+  const loopGuardSize = 10;
+  // The tracks of the stream end up to a second apart.
+  const endGuardSize = 1;
   const backwardBufferSize = 10;
 
   let pendingBufferLoop: Promise<void> = Promise.resolve();
@@ -242,7 +251,10 @@ export async function startBuffering(
         // Buffered until the end, nothing more to do.
         return undefined;
       }
-      // Continue from the start of the stream.
+      // Continue from the start of the stream, unless we're about to loop.
+      if (streamDuration - currentTime < loopGuardSize) {
+        return undefined;
+      }
       const startRange = findBufferedRangeAtStart(sourceBuffer, segmentForTime);
       const ahead = streamDuration - currentTime + (startRange?.[1] ?? 0);
       if (ahead > 20) {
@@ -250,6 +262,15 @@ export async function startBuffering(
       }
       return startRange ? segmentAfter(startRange[1]) : segmentForTime(0);
     } else {
+      if (
+        streamDuration - currentTime < endGuardSize &&
+        currentRange[0] < streamDuration - endGuardSize
+      ) {
+        // Playing backwards from the very end (after looping, or after
+        // reaching the end): wait until we're past the end of the shortest
+        // track before touching the SourceBuffers (see loopGuardSize).
+        return undefined;
+      }
       const startRange = findBufferedRangeAtStart(sourceBuffer, segmentForTime);
       const reachesStart =
         startRange !== undefined && startRange[0] === currentRange[0];
@@ -263,7 +284,10 @@ export async function startBuffering(
         // Buffered until the start, nothing more to do.
         return undefined;
       }
-      // Continue from the end of the stream.
+      // Continue from the end of the stream, unless we're about to loop.
+      if (currentTime < loopGuardSize) {
+        return undefined;
+      }
       const endRange = findBufferedRange(
         sourceBuffer,
         segmentForTime,
