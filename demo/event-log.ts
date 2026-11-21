@@ -2,7 +2,9 @@ import type { BabyVideoElement } from "../src/index";
 
 const loggedEvents = [
   "loadstart",
+  "abort",
   "emptied",
+  "error",
   "loadedmetadata",
   "loadeddata",
   "canplay",
@@ -89,6 +91,8 @@ function describeEvent(video: BabyVideoElement, event: Event): string {
       return `${video.videoWidth}×${video.videoHeight}`;
     case "volumechange":
       return `volume=${video.volume.toFixed(2)} muted=${video.muted}`;
+    case "error":
+      return `code=${video.error?.code} ${video.error?.message ?? ""}`;
     default:
       return time;
   }

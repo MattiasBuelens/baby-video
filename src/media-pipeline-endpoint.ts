@@ -4,6 +4,7 @@ import {
   MediaPipeline,
   type MediaPipelineAudioOutputInit,
   type MediaPipelineCanvas,
+  type MediaPipelineError,
   type MediaPipelineHost,
   type PresentedVideoFrame
 } from "./media-pipeline";
@@ -77,13 +78,19 @@ export class MediaPipelineEndpoint implements MediaPipelineHost {
         pipeline.updateAudioClock(message.snapshot);
         break;
       case "detach":
-        this.#close();
+        this.detach();
         break;
     }
   }
 
   // https://w3c.github.io/media-source/#mediasource-detach
-  #close(): void {
+  // On the main thread, the element calls this directly, so the MediaSource
+  // is closed by the time the element attaches it again. From a worker, it
+  // sends a "detach" message.
+  detach(): void {
+    if (this.#closed) {
+      return;
+    }
     this.#closed = true;
     this.#pipeline?.detach();
     this.#pipeline = undefined;
@@ -159,6 +166,10 @@ export class MediaPipelineEndpoint implements MediaPipelineHost {
 
   onVideoFramesDropped(droppedFrames: number): void {
     this.#post({ type: "video-frames-dropped", droppedFrames });
+  }
+
+  onError(error: MediaPipelineError, message: string): void {
+    this.#post({ type: "error", error, message });
   }
 
   createAudioOutput(init: MediaPipelineAudioOutputInit): void {
