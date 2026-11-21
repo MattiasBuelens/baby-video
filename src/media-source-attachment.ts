@@ -25,7 +25,11 @@ export interface MediaSourceAttachment {
   // Sets HTMLMediaElement.readyState.
   updateReadyState(newReadyState: MediaReadyState): void;
   // Notifies the media element that new media data was appended.
+  // (This also changes the buffered ranges.)
   notifyProgress(): void;
+  // Notifies the media element that the buffered ranges changed,
+  // for example because media data was removed.
+  notifyBufferedChange(): void;
   // Notifies the media element that it now has all of the media data.
   notifyEndOfStream(): void;
 }

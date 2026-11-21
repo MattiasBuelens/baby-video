@@ -3,11 +3,12 @@ import { BabyMediaSource } from "./media-source";
 import { Deferred, queueTask } from "./util";
 import { TimeRange, TimeRanges } from "./time-ranges";
 import { MediaReadyState } from "./media-source-attachment";
-import {
-  MediaPipeline,
-  type MediaPipelineAudioOutputInit,
-  type MediaPipelineHost
+import type {
+  MediaPipelineAudioOutputInit,
+  MediaPipelineHost
 } from "./media-pipeline";
+import { MediaPipelineEndpoint } from "./media-pipeline-endpoint";
+import { MediaPipelineProxy } from "./media-pipeline-proxy";
 import { AudioOutput } from "./audio-output";
 
 const template = document.createElement("template");
@@ -72,7 +73,7 @@ export class BabyVideoElement extends HTMLElement {
   #hasFiredLoadedData: boolean = false;
   #isEndOfStream: boolean = false;
 
-  #pipeline: MediaPipeline | undefined;
+  #pipeline: MediaPipelineProxy | undefined;
   #pipelineHost: MediaPipelineHost | undefined;
   #audioOutput: AudioOutput | undefined;
   #audioOutputPlaying: boolean = false;
@@ -230,14 +231,14 @@ export class BabyVideoElement extends HTMLElement {
     queueTask(() => this.dispatchEvent(new Event("emptied")));
     if (srcObject) {
       this.#pipelineHost = new BabyVideoElementPipelineHost(this);
-      this.#pipeline = new MediaPipeline(
-        srcObject,
-        this.#pipelineHost,
+      // The element only ever talks to the pipeline through a message port.
+      // Here, the pipeline lives on the main thread, next to the MediaSource.
+      const { port1, port2 } = new MessageChannel();
+      new MediaPipelineEndpoint(srcObject, port2).attach(
         this.#canvas,
-        {
-          playbackRate: this.#playbackRate
-        }
+        this.#playbackRate
       );
+      this.#pipeline = new MediaPipelineProxy(port1, this.#pipelineHost);
     }
   }
 
@@ -763,6 +764,10 @@ class BabyVideoElementPipelineHost implements MediaPipelineHost {
 
   onProgress(): void {
     if (this.#isCurrent()) notifyProgress(this.#element);
+  }
+
+  onBufferedChange(): void {
+    // The element reads the mirrored ranges from the MediaPipelineProxy.
   }
 
   onEndOfStream(): void {

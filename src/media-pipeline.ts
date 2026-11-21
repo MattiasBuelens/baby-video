@@ -37,6 +37,8 @@ export interface MediaPipelineHost {
   onDurationChange(duration: number): void;
   // New media data was appended.
   onProgress(): void;
+  // The buffered ranges changed (other than by appending media data).
+  onBufferedChange(): void;
   // The media element now has all of the media data.
   onEndOfStream(): void;
   // The current playback position changed, either through the usual monotonic
@@ -266,6 +268,10 @@ export class MediaPipeline implements MediaSourceAttachment {
   notifyProgress(): void {
     // https://html.spec.whatwg.org/multipage/media.html#concept-media-load-resource (the progress event, fired by the element)
     this.#host.onProgress();
+  }
+
+  notifyBufferedChange(): void {
+    this.#host.onBufferedChange();
   }
 
   notifyEndOfStream(): void {

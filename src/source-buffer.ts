@@ -664,6 +664,7 @@ export class BabySourceBuffer extends EventTarget {
     queueMicrotask(() => {
       // 6. Run the coded frame removal algorithm with start and end as the start and end of the removal range.
       this.#codedFrameRemoval(start, end);
+      getMediaElement(this.#parent)!.notifyBufferedChange();
       // 7. Set the updating attribute to false.
       this.#updating = false;
       // 8. Queue a task to fire an event named update at this SourceBuffer object.
