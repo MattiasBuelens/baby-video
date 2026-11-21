@@ -39,7 +39,8 @@ if (useWorker) {
     worker.postMessage({
       type: event.type as PlaybackStateMessage["type"],
       currentTime: video.currentTime,
-      playbackRate: video.playbackRate
+      playbackRate: video.playbackRate,
+      loop: video.loop
     } satisfies PlaybackStateMessage);
   };
   for (const type of ["timeupdate", "seeking", "ratechange"]) {
@@ -145,4 +146,10 @@ function setupPlaybackButtons(video: BabyVideoElement) {
   for (const type of ["ratechange", "play", "pause", "ended"]) {
     video.addEventListener(type, updatePressed);
   }
+  const loopButton =
+    document.querySelector<HTMLButtonElement>("button[name=loop]")!;
+  loopButton.addEventListener("click", () => {
+    video.loop = !video.loop;
+    loopButton.setAttribute("aria-pressed", String(video.loop));
+  });
 }
