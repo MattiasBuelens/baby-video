@@ -9,6 +9,7 @@ export interface PlaybackStateMessage {
   readonly type: "timeupdate" | "seeking" | "ratechange";
   readonly currentTime: number;
   readonly playbackRate: number;
+  readonly loop: boolean;
 }
 
 // Worker to main thread.
@@ -24,6 +25,7 @@ export type WorkerMessage =
 class PlaybackStateMirror extends EventTarget implements PlaybackState {
   currentTime: number = 0;
   playbackRate: number = 1;
+  loop: boolean = false;
 }
 
 const playback = new PlaybackStateMirror();
@@ -31,6 +33,7 @@ self.addEventListener("message", (event: MessageEvent) => {
   const message = event.data as PlaybackStateMessage;
   playback.currentTime = message.currentTime;
   playback.playbackRate = message.playbackRate;
+  playback.loop = message.loop;
   playback.dispatchEvent(new Event(message.type));
 });
 

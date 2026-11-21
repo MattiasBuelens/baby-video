@@ -74,6 +74,9 @@
             ⏪ Play backwards
           </button>
           <button type="button" data-rate="1">▶️ Play forwards</button>
+          <button type="button" name="loop" aria-pressed="false">
+            🔁 Loop
+          </button>
         </div>
 
         <p class="pipeline-mode">
@@ -82,6 +85,12 @@
           <button type="button" name="block">
             🧱 Block main thread for 2s
           </button>
+        </p>
+
+        <p class="hint">
+          <a href="https://peach.blender.org/">Big Buck Bunny</a> © Blender
+          Foundation, licensed under
+          <a href="https://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a>.
         </p>
       </section>
 
@@ -128,7 +137,8 @@
         <h2 id="buffer-heading">Buffer</h2>
         <p class="hint">
           The demo keeps 30 seconds buffered in the direction of playback and 10
-          seconds behind. Switch direction and watch the window flip.
+          seconds behind. Switch direction and watch the window flip. With loop
+          on, it buffers across the jump between the end and the start.
         </p>
         <p class="buffer-summary" aria-live="off"></p>
         <h3>Around the playhead</h3>

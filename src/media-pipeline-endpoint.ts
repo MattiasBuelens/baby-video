@@ -143,6 +143,10 @@ export class MediaPipelineEndpoint implements MediaPipelineHost {
     this.#post({ type: "end-of-stream" });
   }
 
+  onStreamReopened(): void {
+    this.#post({ type: "stream-reopened" });
+  }
+
   onTimeUpdate(currentTime: number, isNormalPlayback: boolean): void {
     this.#post({
       type: "time-update",

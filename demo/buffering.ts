@@ -9,10 +9,12 @@ export const streamDuration = 634.56;
 // What the buffering logic needs to know about the media element.
 // On the main thread, that's the element itself. In a worker, it's a mirror
 // that the main thread keeps up to date (see worker.ts).
-// Fires "timeupdate", "seeking" and "ratechange" events.
+// Fires "timeupdate", "seeking" and "ratechange" events. There's no event for
+// changes to loop, but those are picked up at the next "timeupdate".
 export interface PlaybackState extends EventTarget {
   readonly currentTime: number;
   readonly playbackRate: number;
+  readonly loop: boolean;
 }
 
 export interface Buffering {
@@ -66,8 +68,6 @@ export async function startBuffering(
     url: string;
     startTime: number;
     endTime: number;
-    isFirst: boolean;
-    isLast: boolean;
   }
 
   function getSegmentForTime(
@@ -87,9 +87,7 @@ export async function startBuffering(
     return {
       url,
       startTime: segmentIndex * segmentDuration,
-      endTime: (segmentIndex + 1) * segmentDuration,
-      isFirst: segmentIndex === 0,
-      isLast: segmentIndex === lastSegmentIndex
+      endTime: (segmentIndex + 1) * segmentDuration
     };
   }
 
@@ -174,9 +172,155 @@ export async function startBuffering(
   }
 
   const forwardBufferSize = 30;
+  // Appending to (or removing from) a SourceBuffer re-opens an ended
+  // MediaSource. Until we end it again, the buffered ranges end where the
+  // *shortest* track ends, so if playback gets there in the meantime, it
+  // stalls right before it would loop. So when looping, stop touching the
+  // SourceBuffers this many seconds before the jump. (The fetch for the next
+  // segment can take a while, and its append comes after that.)
+  const loopGuardSize = 10;
+  // The tracks of the stream end up to a second apart.
+  const endGuardSize = 1;
   const backwardBufferSize = 10;
 
   let pendingBufferLoop: Promise<void> = Promise.resolve();
+
+  // The buffered range at the very start of the stream, if any. Like at the
+  // end, the range may start slightly after 0 (e.g. with a B-frame reordering
+  // delay), so any range starting in the first segment counts.
+  function findBufferedRangeAtStart(
+    sourceBuffer: BabySourceBuffer,
+    segmentForTime: (time: number) => Segment | undefined
+  ): readonly [number, number] | undefined {
+    const buffered = sourceBuffer.buffered;
+    if (
+      buffered.length === 0 ||
+      buffered.start(0) >= segmentForTime(0)!.endTime
+    ) {
+      return undefined;
+    }
+    return [buffered.start(0), buffered.end(0)];
+  }
+
+  // Picks the next segment to buffer for a track, or returns undefined if
+  // there's enough buffered in the direction of playback.
+  // When looping, playback jumps from the end back to the start (or from the
+  // start back to the end, when playing backwards), so we keep buffering
+  // across that jump: otherwise every loop would stall on a segment fetch.
+  function getNextSegment(
+    sourceBuffer: BabySourceBuffer,
+    segmentForTime: (time: number) => Segment | undefined
+  ): Segment | undefined {
+    const currentTime = playback.currentTime;
+    const currentRange = findBufferedRange(
+      sourceBuffer,
+      segmentForTime,
+      currentTime
+    );
+    if (!currentRange) {
+      // No buffer, need new segment immediately
+      return segmentForTime(currentTime);
+    }
+    // The buffered range may not start or end exactly at a segment boundary
+    // (e.g. when frames are offset by a B-frame reordering delay), so snap its
+    // edge to the nearest boundary and pick the segment right next to it.
+    const segmentDuration = segmentForTime(0)!.endTime;
+    const segmentAfter = (time: number) =>
+      segmentForTime(
+        (Math.round(time / segmentDuration) + 0.5) * segmentDuration
+      );
+    const segmentBefore = (time: number) =>
+      segmentForTime(
+        (Math.round(time / segmentDuration) - 0.5) * segmentDuration
+      );
+    if (playback.playbackRate >= 0) {
+      const endRange = findBufferedRange(
+        sourceBuffer,
+        segmentForTime,
+        streamDuration
+      );
+      const reachesEnd =
+        endRange !== undefined && endRange[0] === currentRange[0];
+      if (!reachesEnd) {
+        // Not enough buffer ahead of current time
+        return currentRange[1] - currentTime <= 20
+          ? segmentAfter(currentRange[1])
+          : undefined;
+      }
+      if (!playback.loop) {
+        // Buffered until the end, nothing more to do.
+        return undefined;
+      }
+      // Continue from the start of the stream, unless we're about to loop.
+      if (streamDuration - currentTime < loopGuardSize) {
+        return undefined;
+      }
+      const startRange = findBufferedRangeAtStart(sourceBuffer, segmentForTime);
+      const ahead = streamDuration - currentTime + (startRange?.[1] ?? 0);
+      if (ahead > 20) {
+        return undefined;
+      }
+      return startRange ? segmentAfter(startRange[1]) : segmentForTime(0);
+    } else {
+      if (
+        streamDuration - currentTime < endGuardSize &&
+        currentRange[0] < streamDuration - endGuardSize
+      ) {
+        // Playing backwards from the very end (after looping, or after
+        // reaching the end): wait until we're past the end of the shortest
+        // track before touching the SourceBuffers (see loopGuardSize).
+        return undefined;
+      }
+      const startRange = findBufferedRangeAtStart(sourceBuffer, segmentForTime);
+      const reachesStart =
+        startRange !== undefined && startRange[0] === currentRange[0];
+      if (!reachesStart) {
+        // Not enough buffer behind current time
+        return currentTime - currentRange[0] <= 20
+          ? segmentBefore(currentRange[0])
+          : undefined;
+      }
+      if (!playback.loop) {
+        // Buffered until the start, nothing more to do.
+        return undefined;
+      }
+      // Continue from the end of the stream, unless we're about to loop.
+      if (currentTime < loopGuardSize) {
+        return undefined;
+      }
+      const endRange = findBufferedRange(
+        sourceBuffer,
+        segmentForTime,
+        streamDuration
+      );
+      const ahead = currentTime + (endRange ? streamDuration - endRange[0] : 0);
+      if (ahead > 20) {
+        return undefined;
+      }
+      return endRange
+        ? segmentBefore(endRange[0])
+        : segmentForTime(streamDuration);
+    }
+  }
+
+  // The ranges to keep around the current time. When looping, this wraps
+  // around the start and end of the stream, so we don't remove what we just
+  // buffered for after the jump.
+  function getRetainedRanges(): TimeRanges {
+    const forward = playback.playbackRate >= 0;
+    const retainStart =
+      playback.currentTime - (forward ? backwardBufferSize : forwardBufferSize);
+    const retainEnd =
+      playback.currentTime + (forward ? forwardBufferSize : backwardBufferSize);
+    if (!playback.loop) {
+      return new TimeRanges([[retainStart, retainEnd]]);
+    }
+    return new TimeRanges([
+      [retainStart - streamDuration, retainEnd - streamDuration],
+      [retainStart, retainEnd],
+      [retainStart + streamDuration, retainEnd + streamDuration]
+    ]);
+  }
 
   async function trackBufferLoop(
     sourceBuffer: BabySourceBuffer,
@@ -186,60 +330,16 @@ export async function startBuffering(
     while (true) {
       signal.throwIfAborted();
       // Check buffer health
-      while (true) {
-        const currentRange = findBufferedRange(
-          sourceBuffer,
-          segmentForTime,
-          playback.currentTime
-        );
-        const forward = playback.playbackRate >= 0;
-        if (!currentRange) {
-          // No buffer, need new segment immediately
-          break;
-        }
-        if (forward) {
-          if (currentRange[1] - playback.currentTime <= 20) {
-            // Not enough buffer ahead of current time
-            break;
-          }
-        } else {
-          if (playback.currentTime - currentRange[0] <= 20) {
-            // Not enough buffer behind current time
-            break;
-          }
-        }
+      let nextSegment: Segment | undefined;
+      while (
+        (nextSegment = getNextSegment(sourceBuffer, segmentForTime)) ===
+        undefined
+      ) {
         // Still enough buffer, wait for playback to progress
         await waitForEvent(playback, ["timeupdate", "ratechange"], signal);
       }
-      // Find next segment
-      const currentRange = findBufferedRange(
-        sourceBuffer,
-        segmentForTime,
-        playback.currentTime
-      );
-      const forward = playback.playbackRate >= 0;
-      // The buffered range may not start or end exactly at a segment boundary
-      // (e.g. when frames are offset by a B-frame reordering delay), so snap its
-      // edge to the nearest boundary and pick the segment right next to it.
-      const segmentDuration = segmentForTime(0)!.endTime;
-      const nextTime = currentRange
-        ? forward
-          ? (Math.round(currentRange[1] / segmentDuration) + 0.5) *
-            segmentDuration
-          : (Math.round(currentRange[0] / segmentDuration) - 0.5) *
-            segmentDuration
-        : playback.currentTime;
-      const nextSegment = segmentForTime(nextTime)!;
       // Remove old buffer before/after current time
-      const retainStart =
-        playback.currentTime -
-        (forward ? backwardBufferSize : forwardBufferSize);
-      const retainEnd =
-        playback.currentTime +
-        (forward ? forwardBufferSize : backwardBufferSize);
-      const oldBuffered = sourceBuffer.buffered.subtract(
-        new TimeRanges([[retainStart, retainEnd]])
-      );
+      const oldBuffered = sourceBuffer.buffered.subtract(getRetainedRanges());
       for (let i = 0; i < oldBuffered.length; i++) {
         sourceBuffer.remove(oldBuffered.start(i), oldBuffered.end(i));
         await waitForEvent(sourceBuffer, "updateend");
@@ -251,29 +351,16 @@ export async function startBuffering(
       sourceBuffer.appendBuffer(segmentData);
       await waitForEvent(sourceBuffer, "updateend");
       await maybeEndOfStream(signal);
-      // Check if we're done buffering
-      if (forward) {
-        if (nextSegment.isLast) {
-          return; // Stop buffering until next seek
-        }
-      } else {
-        if (nextSegment.isFirst) {
-          return; // Stop buffering until next seek
-        }
-      }
     }
   }
 
   async function bufferLoop(signal: AbortSignal) {
     await pendingBufferLoop;
+    // These only stop when aborted (by a seek or a rate change).
     await Promise.allSettled([
       trackBufferLoop(videoSourceBuffer, getVideoSegmentForTime, signal),
       trackBufferLoop(audioSourceBuffer, getAudioSegmentForTime, signal)
     ]);
-    signal.throwIfAborted();
-    // All tracks are done buffering until the last segment
-    // (or until the first segment, when buffering backwards).
-    await maybeEndOfStream(signal);
   }
 
   let bufferAbortController: AbortController = new AbortController();

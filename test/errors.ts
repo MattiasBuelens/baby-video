@@ -1,7 +1,7 @@
 // Test page for media errors and the load algorithm,
 // driven by test/errors.spec.mjs.
-import { BabyMediaSource, BabyVideoElement } from "../src/index";
-import { ErrorsSource, type ErrorsSourceCommand } from "./errors-source";
+import type { BabyVideoElement } from "../src/index";
+import { attachSource } from "./attach-source";
 
 const [video, otherVideo] =
   document.querySelectorAll<BabyVideoElement>("baby-video");
@@ -22,40 +22,7 @@ for (const type of [
   video.addEventListener(type, () => events.push(type));
 }
 
-let run: (command: ErrorsSourceCommand) => Promise<void>;
-let mediaSource: BabyMediaSource | undefined;
-if (new URLSearchParams(location.search).has("worker")) {
-  const worker = new Worker(new URL("./errors-worker.ts", import.meta.url), {
-    type: "module"
-  });
-  let nextId = 0;
-  const pending = new Map<number, (error?: string) => void>();
-  await new Promise<void>((resolve) => {
-    worker.addEventListener("message", (event: MessageEvent) => {
-      const message = event.data;
-      if (message.type === "handle") {
-        video.srcObject = message.handle;
-        resolve();
-      } else if (message.type === "done") {
-        pending.get(message.id)!(message.error);
-        pending.delete(message.id);
-      }
-    });
-  });
-  run = (command) =>
-    new Promise((resolve, reject) => {
-      const id = nextId++;
-      pending.set(id, (error) =>
-        error ? reject(new Error(error)) : resolve()
-      );
-      worker.postMessage({ id, command });
-    });
-} else {
-  mediaSource = new BabyMediaSource();
-  video.srcObject = mediaSource;
-  const source = new ErrorsSource(mediaSource);
-  run = (command) => source.run(command);
-}
+const { run, mediaSource } = await attachSource(video);
 
 function snapshot() {
   return {

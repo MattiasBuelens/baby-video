@@ -32,6 +32,9 @@ export interface MediaSourceAttachment {
   notifyBufferedChange(): void;
   // Notifies the media element that it now has all of the media data.
   notifyEndOfStream(): void;
+  // Notifies the media element that the MediaSource went from "ended" back
+  // to "open", so it no longer has all of the media data.
+  notifyStreamReopened(): void;
   // Notifies the media element of a network or decode error, from the
   // MediaSource's end of stream algorithm.
   // https://w3c.github.io/media-source/#end-of-stream-algorithm

@@ -13,6 +13,8 @@ import { setupEventLog } from "./event-log";
 import { setupFrameStats } from "./frame-stats";
 
 const video = document.querySelector<BabyVideoElement>("baby-video")!;
+// Set from here (rather than in the HTML) so Vite bundles the image.
+video.poster = new URL("./poster.jpg", import.meta.url).href;
 setupEventLog(video, document.querySelector(".event-log")!);
 setupFrameStats(video, document.querySelector(".frame-stats")!);
 setupPlaybackButtons(video);
@@ -39,7 +41,8 @@ if (useWorker) {
     worker.postMessage({
       type: event.type as PlaybackStateMessage["type"],
       currentTime: video.currentTime,
-      playbackRate: video.playbackRate
+      playbackRate: video.playbackRate,
+      loop: video.loop
     } satisfies PlaybackStateMessage);
   };
   for (const type of ["timeupdate", "seeking", "ratechange"]) {
@@ -145,4 +148,10 @@ function setupPlaybackButtons(video: BabyVideoElement) {
   for (const type of ["ratechange", "play", "pause", "ended"]) {
     video.addEventListener(type, updatePressed);
   }
+  const loopButton =
+    document.querySelector<HTMLButtonElement>("button[name=loop]")!;
+  loopButton.addEventListener("click", () => {
+    video.loop = !video.loop;
+    loopButton.setAttribute("aria-pressed", String(video.loop));
+  });
 }

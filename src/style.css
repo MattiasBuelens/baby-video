@@ -1,5 +1,7 @@
 :host {
   display: inline-flex;
+  /* For the poster frame, which is shown on top of the canvas. */
+  position: relative;
 }
 
 /*
@@ -14,4 +16,20 @@ canvas {
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+
+/*
+ * https://html.spec.whatwg.org/multipage/media.html#poster-frame
+ * Like the video itself, the poster frame is letterboxed in the element.
+ */
+.poster {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.poster[hidden] {
+  display: none;
 }

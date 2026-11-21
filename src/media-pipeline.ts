@@ -41,6 +41,8 @@ export interface MediaPipelineHost {
   onBufferedChange(): void;
   // The media element now has all of the media data.
   onEndOfStream(): void;
+  // The media element no longer has all of the media data.
+  onStreamReopened(): void;
   // The current playback position changed, either through the usual monotonic
   // increase during normal playback, or because playback stopped.
   onTimeUpdate(currentTime: number, isNormalPlayback: boolean): void;
@@ -355,6 +357,10 @@ export class MediaPipeline implements MediaSourceAttachment {
     // https://w3c.github.io/media-source/#dfn-end-of-stream
     // 3.2. Notify the media element that it now has all of the media data.
     this.#host.onEndOfStream();
+  }
+
+  notifyStreamReopened(): void {
+    this.#host.onStreamReopened();
   }
 
   notifyEndOfStreamError(error: "network" | "decode"): void {

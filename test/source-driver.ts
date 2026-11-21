@@ -1,15 +1,17 @@
-// Drives a BabyMediaSource for test/errors.spec.mjs, on the main thread
-// (see errors.ts) or in a worker (see errors-worker.ts).
+// Drives a BabyMediaSource for the tests, on the main thread or in a worker
+// (see source-driver-worker.ts). Use attachSource() from attach-source.ts
+// to set one up.
 import type { BabyMediaSource, BabySourceBuffer } from "../src/worker";
 import { waitForEvent } from "../src/util";
 import audioUrl from "./fixtures/sine-440.m4a?url";
 import videoUrl from "./fixtures/video.m4v?url";
 
-export type ErrorsSourceCommand =
+export type SourceCommand =
   | { type: "wait-for-open" }
   | { type: "append-media"; corruptVideoConfig?: boolean }
   | { type: "fail-video-decoder" }
   | { type: "append-wrong-init-segment" }
+  | { type: "append-media-again" }
   | { type: "end-of-stream"; error?: "network" | "decode" };
 
 // Decoders are quite forgiving about corrupted data, so make them fail on
@@ -37,14 +39,14 @@ globalThis.VideoDecoder = class extends OriginalVideoDecoder {
   }
 };
 
-export class ErrorsSource {
+export class SourceDriver {
   readonly #mediaSource: BabyMediaSource;
 
   constructor(mediaSource: BabyMediaSource) {
     this.#mediaSource = mediaSource;
   }
 
-  async run(command: ErrorsSourceCommand): Promise<void> {
+  async run(command: SourceCommand): Promise<void> {
     switch (command.type) {
       case "wait-for-open":
         return this.#waitForOpen();
@@ -55,6 +57,8 @@ export class ErrorsSource {
         return;
       case "append-wrong-init-segment":
         return this.#appendWrongInitSegment();
+      case "append-media-again":
+        return this.#appendMediaAgain();
       case "end-of-stream":
         this.#mediaSource.endOfStream(command.error);
         return;
@@ -86,6 +90,17 @@ export class ErrorsSource {
     );
     await append(audioSourceBuffer, audio);
     await append(videoSourceBuffer, video.buffer);
+  }
+
+  // Appends the same media again to the existing SourceBuffers.
+  // (This reopens an ended MediaSource.)
+  async #appendMediaAgain(): Promise<void> {
+    const [videoSourceBuffer, audioSourceBuffer] =
+      this.#mediaSource.sourceBuffers;
+    const video = await (await fetch(videoUrl)).arrayBuffer();
+    const audio = await (await fetch(audioUrl)).arrayBuffer();
+    await append(audioSourceBuffer, audio);
+    await append(videoSourceBuffer, video);
   }
 
   async #appendWrongInitSegment(): Promise<void> {
