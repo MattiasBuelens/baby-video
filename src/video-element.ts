@@ -179,7 +179,12 @@ export class BabyVideoElement extends HTMLElement {
     this.#canvasContext.fillStyle = "black";
     this.#canvasContext.fillRect(0, 0, this.#canvas.width, this.#canvas.height);
 
-    if (typeof VideoDecoder !== "function") {
+    // Safari 16.4 to 18 have VideoDecoder, but not AudioDecoder.
+    // There is no fallback to play without audio, so we need both.
+    if (
+      typeof VideoDecoder !== "function" ||
+      typeof AudioDecoder !== "function"
+    ) {
       throw new Error(`<baby-video>: This browser does not support WebCodecs.`);
     }
     this.#videoDecoder = new VideoDecoder({
