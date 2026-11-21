@@ -130,9 +130,9 @@ export class BabyVideoElement extends HTMLElement {
   // Tasks queued on the media element event task source that haven't run yet.
   // The media element load algorithm discards them.
   #pendingTasks: Set<MediaElementTask> = new Set();
-  // Identifies the running instance of the resource selection algorithm,
-  // so the media element load algorithm can abort it.
-  #resourceSelectionId: number = 0;
+  // Aborts the running instance of the resource selection algorithm,
+  // see the media element load algorithm.
+  #resourceSelectionAbortController: AbortController = new AbortController();
   #muted: boolean = false;
   #paused: boolean = true;
   #playbackRate: number = 1;
@@ -377,7 +377,8 @@ export class BabyVideoElement extends HTMLElement {
     // 1. Set this element's is currently stalled to false.
     // (We don't track stalls.)
     // 2. Abort any already-running instance of the resource selection algorithm for this element.
-    this.#resourceSelectionId++;
+    this.#resourceSelectionAbortController.abort();
+    this.#resourceSelectionAbortController = new AbortController();
     // 3. Let pending tasks be a list of all tasks from the media element's media element event task source
     //    in one of the task queues.
     // 4. For each task in pending tasks that would resolve pending play promises or reject pending play promises,
@@ -481,9 +482,9 @@ export class BabyVideoElement extends HTMLElement {
     // 3. Await a stable state, allowing the task that invoked this algorithm to continue.
     //    The synchronous section consists of all the remaining steps of this algorithm
     //    until the algorithm says the synchronous section has ended.
-    const resourceSelectionId = this.#resourceSelectionId;
+    const signal = this.#resourceSelectionAbortController.signal;
     queueMicrotask(() => {
-      if (resourceSelectionId !== this.#resourceSelectionId) {
+      if (signal.aborted) {
         // The media element load algorithm aborted us.
         return;
       }
