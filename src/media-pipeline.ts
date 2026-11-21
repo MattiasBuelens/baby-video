@@ -60,6 +60,14 @@ export interface MediaPipelineAudioOutputInit {
   readonly port: MessagePort;
 }
 
+// The canvas that the pipeline renders video frames to.
+// On the main thread, this is the media element's own canvas. In a worker,
+// the element transfers control of its canvas to an OffscreenCanvas.
+export type MediaPipelineCanvas = HTMLCanvasElement | OffscreenCanvas;
+type MediaPipelineCanvasContext =
+  | CanvasRenderingContext2D
+  | OffscreenCanvasRenderingContext2D;
+
 export interface MediaPipelineInit {
   readonly playbackRate: number;
 }
@@ -123,8 +131,8 @@ interface PushedAudioChunk {
 export class MediaPipeline implements MediaSourceAttachment {
   readonly #mediaSource: BabyMediaSource;
   readonly #host: MediaPipelineHost;
-  readonly #canvas: OffscreenCanvas;
-  readonly #canvasContext: OffscreenCanvasRenderingContext2D;
+  readonly #canvas: MediaPipelineCanvas;
+  readonly #canvasContext: MediaPipelineCanvasContext;
 
   #currentTime: number = 0;
   #playbackRate: number;
@@ -175,13 +183,14 @@ export class MediaPipeline implements MediaSourceAttachment {
   constructor(
     mediaSource: BabyMediaSource,
     host: MediaPipelineHost,
-    canvas: OffscreenCanvas,
+    canvas: MediaPipelineCanvas,
     init: MediaPipelineInit
   ) {
     this.#mediaSource = mediaSource;
     this.#host = host;
     this.#canvas = canvas;
-    this.#canvasContext = canvas.getContext("2d")!;
+    // TypeScript can't resolve the getContext() overload on a union type.
+    this.#canvasContext = canvas.getContext("2d") as MediaPipelineCanvasContext;
     this.#canvasContext.fillStyle = "black";
     this.#canvasContext.fillRect(0, 0, canvas.width, canvas.height);
     this.#playbackRate = init.playbackRate;

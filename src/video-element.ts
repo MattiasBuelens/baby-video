@@ -48,7 +48,7 @@ let createAudioOutput: (
 // rendering and the playback clock) lives in the MediaPipeline, which reports
 // back through MediaPipelineHost.
 export class BabyVideoElement extends HTMLElement {
-  #canvas: HTMLCanvasElement;
+  readonly #canvas: HTMLCanvasElement;
 
   #currentTime: number = 0;
   #duration: number = NaN;
@@ -86,7 +86,9 @@ export class BabyVideoElement extends HTMLElement {
     // The default object size is a width of 300 CSS pixels and a height of 150 CSS pixels.
     this.#videoWidth = 300;
     this.#videoHeight = 150;
-    this.#canvas = this.#createCanvas();
+    this.#canvas = document.createElement("canvas");
+    this.#canvas.width = 300;
+    this.#canvas.height = 150;
     shadow.appendChild(this.#canvas);
 
     const canvasContext = this.#canvas.getContext("2d")!;
@@ -101,24 +103,6 @@ export class BabyVideoElement extends HTMLElement {
     ) {
       throw new Error(`<baby-video>: This browser does not support WebCodecs.`);
     }
-  }
-
-  #createCanvas(): HTMLCanvasElement {
-    const canvas = document.createElement("canvas");
-    canvas.width = 300;
-    canvas.height = 150;
-    return canvas;
-  }
-
-  // Gives the media pipeline a fresh canvas to render to.
-  // The pipeline renders to an OffscreenCanvas, so it can live in a worker.
-  // Once a canvas has transferred control to an OffscreenCanvas, it cannot
-  // be reused for another pipeline.
-  #transferCanvas(): OffscreenCanvas {
-    const canvas = this.#createCanvas();
-    this.#canvas.replaceWith(canvas);
-    this.#canvas = canvas;
-    return canvas.transferControlToOffscreen();
   }
 
   connectedCallback(): void {
@@ -249,7 +233,7 @@ export class BabyVideoElement extends HTMLElement {
       this.#pipeline = new MediaPipeline(
         srcObject,
         this.#pipelineHost,
-        this.#transferCanvas(),
+        this.#canvas,
         {
           playbackRate: this.#playbackRate
         }
