@@ -1,11 +1,12 @@
-// Drives a BabyMediaSource for test/errors.spec.mjs, on the main thread
-// (see errors.ts) or in a worker (see errors-worker.ts).
+// Drives a BabyMediaSource for the tests, on the main thread or in a worker
+// (see source-driver-worker.ts). Use attachSource() from attach-source.ts
+// to set one up.
 import type { BabyMediaSource, BabySourceBuffer } from "../src/worker";
 import { waitForEvent } from "../src/util";
 import audioUrl from "./fixtures/sine-440.m4a?url";
 import videoUrl from "./fixtures/video.m4v?url";
 
-export type ErrorsSourceCommand =
+export type SourceCommand =
   | { type: "wait-for-open" }
   | { type: "append-media"; corruptVideoConfig?: boolean }
   | { type: "fail-video-decoder" }
@@ -37,14 +38,14 @@ globalThis.VideoDecoder = class extends OriginalVideoDecoder {
   }
 };
 
-export class ErrorsSource {
+export class SourceDriver {
   readonly #mediaSource: BabyMediaSource;
 
   constructor(mediaSource: BabyMediaSource) {
     this.#mediaSource = mediaSource;
   }
 
-  async run(command: ErrorsSourceCommand): Promise<void> {
+  async run(command: SourceCommand): Promise<void> {
     switch (command.type) {
       case "wait-for-open":
         return this.#waitForOpen();

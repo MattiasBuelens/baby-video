@@ -126,6 +126,18 @@ export class BabyVideoElement extends HTMLElement {
   #duration: number = NaN;
   #ended: boolean = false;
   #error: BabyMediaError | null = null;
+  // https://html.spec.whatwg.org/multipage/media.html#default-playback-start-position
+  #defaultPlaybackStartPosition: number = 0;
+  #defaultPlaybackRate: number = 1;
+  // https://html.spec.whatwg.org/multipage/media.html#can-autoplay-flag
+  #canAutoplay: boolean = true;
+  // https://html.spec.whatwg.org/multipage/media.html#show-poster-flag
+  // When a media element is created, this flag must be set to true.
+  #showPoster: boolean = true;
+  // Whether the muted content attribute was applied, see connectedCallback().
+  #initializedMuted: boolean = false;
+  readonly #poster: HTMLImageElement;
+  readonly #dimensionsStyle: HTMLStyleElement;
   #networkState: NetworkState = NetworkState.NETWORK_EMPTY;
   // Tasks queued on the media element event task source that haven't run yet.
   // The media element load algorithm discards them.
@@ -185,6 +197,17 @@ export class BabyVideoElement extends HTMLElement {
     this.#videoHeight = 150;
     this.#canvas = this.#createCanvas();
     shadow.appendChild(this.#canvas);
+    // https://html.spec.whatwg.org/multipage/media.html#attr-video-poster
+    // The poster frame is shown on top of the canvas. In a worker, the canvas
+    // is controlled by an OffscreenCanvas, so we couldn't draw it there.
+    this.#poster = document.createElement("img");
+    this.#poster.className = "poster";
+    this.#poster.alt = "";
+    this.#poster.hidden = true;
+    shadow.appendChild(this.#poster);
+    // The width and height content attributes, see #updateDimensions().
+    this.#dimensionsStyle = document.createElement("style");
+    shadow.appendChild(this.#dimensionsStyle);
 
     const canvasContext = this.#canvas.getContext("2d")!;
     canvasContext.fillStyle = "black";
@@ -236,12 +259,173 @@ export class BabyVideoElement extends HTMLElement {
     // Consider checking for properties that may have been set
     // before the element upgraded.
     // https://web.dev/custom-elements-best-practices/
+    // https://html.spec.whatwg.org/multipage/media.html#attr-media-muted
+    // When a media element is created, if the element has a muted content attribute specified,
+    // then the muted IDL attribute should be set to true.
+    // (A custom element can't see its attributes in its constructor,
+    // so do this when it's first connected.)
+    if (!this.#initializedMuted) {
+      this.#initializedMuted = true;
+      if (this.hasAttribute("muted")) {
+        this.#muted = true;
+        this.#updateVolume();
+      }
+    }
     this.#upgradeProperty("srcObject");
+    this.#upgradeProperty("autoplay");
+    this.#upgradeProperty("loop");
+    this.#upgradeProperty("poster");
+    this.#upgradeProperty("defaultMuted");
+    this.#upgradeProperty("defaultPlaybackRate");
     this.#upgradeProperty("muted");
     this.#upgradeProperty("playbackRate");
     this.#upgradeProperty("volume");
     this.#upgradeProperty("currentTime");
   }
+
+  static get observedAttributes(): string[] {
+    return ["poster", "width", "height"];
+  }
+
+  attributeChangedCallback(name: string): void {
+    if (name === "poster") {
+      this.#updatePosterSource();
+    } else if (name === "width" || name === "height") {
+      this.#updateDimensions();
+    }
+  }
+
+  // region Content attributes
+
+  // https://html.spec.whatwg.org/multipage/media.html#dom-media-autoplay
+  get autoplay(): boolean {
+    return this.hasAttribute("autoplay");
+  }
+
+  set autoplay(value: boolean) {
+    this.toggleAttribute("autoplay", Boolean(value));
+  }
+
+  // https://html.spec.whatwg.org/multipage/media.html#dom-media-loop
+  get loop(): boolean {
+    return this.hasAttribute("loop");
+  }
+
+  set loop(value: boolean) {
+    this.toggleAttribute("loop", Boolean(value));
+  }
+
+  // https://html.spec.whatwg.org/multipage/media.html#dom-media-defaultmuted
+  // Reflects the muted content attribute.
+  get defaultMuted(): boolean {
+    return this.hasAttribute("muted");
+  }
+
+  set defaultMuted(value: boolean) {
+    this.toggleAttribute("muted", Boolean(value));
+  }
+
+  // https://html.spec.whatwg.org/multipage/media.html#dom-video-poster
+  // Reflects the poster content attribute, as a URL.
+  get poster(): string {
+    const value = this.getAttribute("poster");
+    if (value === null) {
+      return "";
+    }
+    try {
+      return new URL(value, document.baseURI).href;
+    } catch {
+      return value;
+    }
+  }
+
+  set poster(value: string) {
+    this.setAttribute("poster", String(value));
+  }
+
+  // https://html.spec.whatwg.org/multipage/media.html#dom-video-playsinline
+  get playsInline(): boolean {
+    return this.hasAttribute("playsinline");
+  }
+
+  set playsInline(value: boolean) {
+    this.toggleAttribute("playsinline", Boolean(value));
+  }
+
+  // https://html.spec.whatwg.org/multipage/embedded-content-other.html#dom-dim-width
+  get width(): number {
+    return parseDimension(this.getAttribute("width")) ?? 0;
+  }
+
+  set width(value: number) {
+    this.setAttribute("width", String(value >>> 0));
+  }
+
+  // https://html.spec.whatwg.org/multipage/embedded-content-other.html#dom-dim-height
+  get height(): number {
+    return parseDimension(this.getAttribute("height")) ?? 0;
+  }
+
+  set height(value: number) {
+    this.setAttribute("height", String(value >>> 0));
+  }
+
+  // https://html.spec.whatwg.org/multipage/rendering.html#attributes-for-embedded-content-and-images
+  // The width and height attributes map to the dimension properties width and height on the element.
+  // Like presentational hints, author styles on the element override them.
+  #updateDimensions(): void {
+    const width = parseDimension(this.getAttribute("width"));
+    const height = parseDimension(this.getAttribute("height"));
+    const declarations = [
+      width !== undefined ? `width: ${width}px;` : "",
+      height !== undefined ? `height: ${height}px;` : ""
+    ].join(" ");
+    this.#dimensionsStyle.textContent = declarations
+      ? `:host { ${declarations} }`
+      : "";
+  }
+
+  // endregion
+
+  // region Poster frame
+
+  // https://html.spec.whatwg.org/multipage/media.html#poster-frame
+  #updatePosterSource(): void {
+    // If element's poster attribute's value is the empty string or if the attribute is absent:
+    // there is no poster frame.
+    const poster = this.getAttribute("poster");
+    if (poster === null || poster === "") {
+      this.#poster.removeAttribute("src");
+    } else {
+      // The image resolves the URL relative to the document, and fetches it.
+      this.#poster.src = poster;
+    }
+    this.#updatePosterVisibility();
+  }
+
+  // https://html.spec.whatwg.org/multipage/media.html#the-video-element (rendering)
+  #updatePosterVisibility(): void {
+    const hasPoster = this.#poster.hasAttribute("src");
+    // When no video data is available (the element's readyState attribute is either HAVE_NOTHING,
+    // or HAVE_METADATA but no video data has yet been obtained at all, ...):
+    //   The video element represents its poster frame, if any.
+    // When the video element is paused, the current playback position is the first frame of video,
+    // and the element's show poster flag is set:
+    //   The video element represents its poster frame, if any, or else the first frame of the video.
+    const noVideoData = !this.#hasFiredLoadedData;
+    const showPosterWhilePaused = this.#paused && this.#showPoster;
+    this.#poster.hidden = !(
+      hasPoster &&
+      (noVideoData || showPosterWhilePaused)
+    );
+  }
+
+  #setShowPoster(showPoster: boolean): void {
+    this.#showPoster = showPoster;
+    this.#updatePosterVisibility();
+  }
+
+  // endregion
 
   #upgradeProperty(prop: keyof this) {
     if (this.hasOwnProperty(prop)) {
@@ -256,7 +440,12 @@ export class BabyVideoElement extends HTMLElement {
   }
 
   get currentTime(): number {
-    return this.#currentTime;
+    // https://html.spec.whatwg.org/multipage/media.html#dom-media-currenttime
+    // The currentTime attribute must, on getting, return the media element's default playback start position,
+    // unless that is zero, in which case it must return the element's official playback position.
+    return this.#defaultPlaybackStartPosition !== 0
+      ? this.#defaultPlaybackStartPosition
+      : this.#currentTime;
   }
 
   set currentTime(value: number) {
@@ -266,7 +455,7 @@ export class BabyVideoElement extends HTMLElement {
     // then it must set the media element's default playback start position to the new value;
     // otherwise, it must set the official playback position to the new value and then seek to the new value.
     if (this.#readyState === MediaReadyState.HAVE_NOTHING) {
-      // TODO
+      this.#defaultPlaybackStartPosition = value;
     } else {
       this.#seek(value);
     }
@@ -311,6 +500,24 @@ export class BabyVideoElement extends HTMLElement {
     this.#updatePlaying();
     this.#updatePlayed();
     this.dispatchEvent(new Event("ratechange"));
+  }
+
+  // https://html.spec.whatwg.org/multipage/media.html#dom-media-defaultplaybackrate
+  get defaultPlaybackRate(): number {
+    return this.#defaultPlaybackRate;
+  }
+
+  set defaultPlaybackRate(value: number) {
+    value = Number(value);
+    if (value === this.#defaultPlaybackRate) {
+      return;
+    }
+    this.#defaultPlaybackRate = value;
+    // When the defaultPlaybackRate or playbackRate attributes change value, the user agent must
+    // queue a media element task given the media element to fire an event named ratechange at the media element.
+    this.#queueMediaElementTask(() =>
+      this.dispatchEvent(new Event("ratechange"))
+    );
   }
 
   get played(): TimeRanges {
@@ -454,9 +661,15 @@ export class BabyVideoElement extends HTMLElement {
     // There's no frame from the new source yet.
     this.#latestPresentedFrame = undefined;
     // 8. Set the playbackRate attribute to the value of the defaultPlaybackRate attribute.
-    // (We don't have defaultPlaybackRate yet, so keep the playbackRate.)
+    if (this.#playbackRate !== this.#defaultPlaybackRate) {
+      this.#playbackRate = this.#defaultPlaybackRate;
+      this.#queueMediaElementTask(() =>
+        this.dispatchEvent(new Event("ratechange"))
+      );
+    }
     // 9. Set the error attribute to null and the can autoplay flag to true.
     this.#error = null;
+    this.#canAutoplay = true;
     // 10. Invoke the media element's resource selection algorithm.
     this.#resourceSelectionAlgorithm();
   }
@@ -478,7 +691,7 @@ export class BabyVideoElement extends HTMLElement {
     // 1. Set the element's networkState attribute to the NETWORK_NO_SOURCE value.
     this.#networkState = NetworkState.NETWORK_NO_SOURCE;
     // 2. Set the element's show poster flag to true.
-    // (We don't have a poster yet.)
+    this.#setShowPoster(true);
     // 3. Await a stable state, allowing the task that invoked this algorithm to continue.
     //    The synchronous section consists of all the remaining steps of this algorithm
     //    until the algorithm says the synchronous section has ended.
@@ -615,6 +828,7 @@ export class BabyVideoElement extends HTMLElement {
     // 3. Set the element's networkState attribute to the NETWORK_NO_SOURCE value.
     this.#networkState = NetworkState.NETWORK_NO_SOURCE;
     // 4. Set the element's show poster flag to true.
+    this.#setShowPoster(true);
     // 5. Fire an event named error at the media element.
     this.dispatchEvent(new Event("error"));
     // 6. Reject pending play promises with promises and a "NotSupportedError" DOMException.
@@ -782,6 +996,12 @@ export class BabyVideoElement extends HTMLElement {
       // 3.1. Change the value of paused to false.
       this.#paused = false;
       this.#updatePlayed();
+      // 3.2. If the show poster flag is true, set the element's show poster flag to false
+      //      and run the time marches on steps.
+      if (this.#showPoster) {
+        this.#setShowPoster(false);
+        this.#timeMarchesOn(false, performance.now());
+      }
       // 3.3. Queue a media element task given the media element to fire an event named play at the element.
       this.#queueMediaElementTask(() => this.dispatchEvent(new Event("play")));
       if (this.#readyState <= MediaReadyState.HAVE_CURRENT_DATA) {
@@ -803,6 +1023,8 @@ export class BabyVideoElement extends HTMLElement {
       const resolve = () => promises.forEach((deferred) => deferred.resolve());
       this.#queueMediaElementTask(resolve, resolve);
     }
+    // 5. Set the media element's can autoplay flag to false.
+    this.#canAutoplay = false;
   }
 
   pause(): void {
@@ -812,12 +1034,15 @@ export class BabyVideoElement extends HTMLElement {
 
   #internalPause(): void {
     // https://html.spec.whatwg.org/multipage/media.html#internal-pause-steps
+    // 1. Set the media element's can autoplay flag to false.
+    this.#canAutoplay = false;
     // 2. If the media element's paused attribute is false, run the following steps:
     if (!this.#paused) {
       // 2.1. Change the value of paused to true.
       this.#updatePlayed();
       this.#paused = true;
       this.#updatePlayed();
+      this.#updatePosterVisibility();
       // 2.2. Take pending play promises and let promises be the result.
       const promises = this.#takePendingPlayPromises();
       // 2.3. Queue a media element task given the media element and the following steps:
@@ -925,6 +1150,18 @@ export class BabyVideoElement extends HTMLElement {
   }
 
   #updateEnded() {
+    // https://html.spec.whatwg.org/multipage/media.html#reaches-the-end
+    // When the current playback position reaches the end of the media resource when the direction of playback
+    // is forwards, then the user agent must follow these steps:
+    // 1. If the media element has a loop attribute specified, then seek to the earliest possible position
+    //    of the media resource and return.
+    // Deviation from the spec: likewise, when the current playback position reaches the earliest possible position
+    // when the direction of playback is backwards, then seek to the end of the media resource.
+    // (That's what play() does after reverse playback ends too, see #internalPlay().)
+    if (this.loop && !this.#paused && !this.#seeking && this.#isAtEdge()) {
+      this.#seek(this.#playbackRate >= 0 ? 0 : this.#duration);
+      return;
+    }
     const wasEnded = this.#ended;
     this.#ended = this.#hasEndedPlayback();
     if (wasEnded || !this.#ended) {
@@ -982,6 +1219,19 @@ export class BabyVideoElement extends HTMLElement {
 
   #hasEndedPlayback(): boolean {
     // https://html.spec.whatwg.org/multipage/media.html#ended-playback
+    // A media element is said to have ended playback when:
+    // * The element's readyState attribute is HAVE_METADATA or greater, and
+    // * Either the current playback position is the end of the media resource, and the direction of playback
+    //   is forwards, and the media element does not have a loop attribute specified,
+    // * Or the current playback position is the earliest possible position, and the direction of playback
+    //   is backwards.
+    // Deviation from the spec: a loop attribute also loops backwards (see #updateEnded()).
+    return !this.loop && this.#isAtEdge();
+  }
+
+  // Whether the current playback position is at the end of the media resource
+  // in the direction of playback.
+  #isAtEdge(): boolean {
     if (this.#readyState < MediaReadyState.HAVE_METADATA) {
       return false;
     }
@@ -1009,6 +1259,8 @@ export class BabyVideoElement extends HTMLElement {
 
   #seek(newPosition: number): void {
     // https://html.spec.whatwg.org/multipage/media.html#dom-media-seek
+    // 1. Set the media element's show poster flag to false.
+    this.#setShowPoster(false);
     // 2. If the media element's readyState is HAVE_NOTHING, return.
     if (this.#readyState === MediaReadyState.HAVE_NOTHING) {
       return;
@@ -1118,6 +1370,17 @@ export class BabyVideoElement extends HTMLElement {
       this.#queueMediaElementTask(() =>
         this.dispatchEvent(new Event("loadedmetadata"))
       );
+      // https://html.spec.whatwg.org/multipage/media.html#media-data-processing-steps-list
+      // Once enough of the media data has been fetched to determine the duration of the media resource,
+      // its dimensions, and other metadata:
+      // 7. If the media element's default playback start position is greater than zero,
+      //    then seek to that time, and let jumped be true.
+      // 8. Set the media element's default playback start position to zero.
+      const defaultPlaybackStartPosition = this.#defaultPlaybackStartPosition;
+      this.#defaultPlaybackStartPosition = 0;
+      if (defaultPlaybackStartPosition > 0) {
+        this.#seek(defaultPlaybackStartPosition);
+      }
       return;
     }
     // If the previous ready state was HAVE_METADATA and the new ready state is HAVE_CURRENT_DATA or greater
@@ -1132,6 +1395,8 @@ export class BabyVideoElement extends HTMLElement {
         this.#queueMediaElementTask(() =>
           this.dispatchEvent(new Event("loadeddata"))
         );
+        // We now have video data to show instead of the poster frame.
+        this.#updatePosterVisibility();
       }
       // If the new ready state is HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA, then the relevant steps below must then be run also.
     }
@@ -1177,7 +1442,34 @@ export class BabyVideoElement extends HTMLElement {
       this.#queueMediaElementTask(() =>
         this.dispatchEvent(new Event("canplaythrough"))
       );
+      // If the element is not eligible for autoplay, then the user agent must abort these substeps.
+      if (this.#isEligibleForAutoplay()) {
+        // The user agent may run the following substeps:
+        // 1. Set the paused attribute to false.
+        this.#paused = false;
+        this.#updatePlayed();
+        // 2. If the element's show poster flag is true, set it to false and run the time marches on steps.
+        if (this.#showPoster) {
+          this.#setShowPoster(false);
+          this.#timeMarchesOn(false, performance.now());
+        }
+        // 3. Queue a media element task given the element to fire an event named play at the element.
+        this.#queueMediaElementTask(() =>
+          this.dispatchEvent(new Event("play"))
+        );
+        // 4. Notify about playing for the element.
+        this.#notifyAboutPlaying();
+      }
     }
+  }
+
+  // https://html.spec.whatwg.org/multipage/media.html#eligible-for-autoplay
+  #isEligibleForAutoplay(): boolean {
+    // its can autoplay flag is true;
+    // its paused attribute is true;
+    // it has an autoplay attribute specified;
+    // (We don't do lazy loading or sandboxing.)
+    return this.#canAutoplay && this.#paused && this.autoplay;
   }
 
   #updateSize(width: number, height: number): void {
@@ -1392,6 +1684,16 @@ class BabyVideoElementPipelineHost implements MediaPipelineHost {
       init.port.close();
     }
   }
+}
+
+// https://html.spec.whatwg.org/multipage/common-microsyntaxes.html#rules-for-parsing-non-negative-integers
+// Returns undefined if the value is absent or can't be parsed.
+function parseDimension(value: string | null): number | undefined {
+  if (value === null) {
+    return undefined;
+  }
+  const match = /^[\t\n\f\r ]*\+?(\d+)/.exec(value);
+  return match ? Number(match[1]) : undefined;
 }
 
 // Like the constants of a WebIDL interface, these are also on the prototype.
