@@ -2,6 +2,13 @@ import { defineConfig, devices } from "@playwright/test";
 
 const port = 5173;
 
+const chromium = {
+  ...devices["Desktop Chrome"],
+  launchOptions: {
+    args: ["--autoplay-policy=no-user-gesture-required"]
+  }
+};
+
 export default defineConfig({
   testDir: "test",
   testMatch: "*.spec.mjs",
@@ -22,12 +29,15 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: {
-        ...devices["Desktop Chrome"],
-        launchOptions: {
-          args: ["--autoplay-policy=no-user-gesture-required"]
-        }
-      }
+      use: chromium
+    },
+    {
+      // Same tests, with the MediaSource (and the media pipeline) in a worker.
+      name: "chromium-worker",
+      use: chromium,
+      metadata: { query: "?worker" },
+      // Already tests the worker on its own.
+      testIgnore: "handle.spec.mjs"
     }
   ],
   webServer: {

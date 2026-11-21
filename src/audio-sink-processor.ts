@@ -55,6 +55,8 @@ class AudioSinkProcessor extends AudioWorkletProcessor {
   #framesSinceAnchor: number = 0;
   #wasStarved: boolean = false;
   #closed: boolean = false;
+  // The port to the media pipeline, see AudioSinkConnectMessage.
+  #sinkPort: MessagePort = this.port;
 
   constructor(options?: AudioWorkletNodeOptions) {
     super(options);
@@ -65,6 +67,12 @@ class AudioSinkProcessor extends AudioWorkletProcessor {
 
   #onMessage(message: AudioSinkInboundMessage): void {
     switch (message.type) {
+      case "connect":
+        this.#sinkPort = message.port;
+        this.#sinkPort.onmessage = (event: MessageEvent) => {
+          this.#onMessage(event.data as AudioSinkInboundMessage);
+        };
+        break;
       case "push":
         if (message.epoch !== this.#epoch) {
           return;
@@ -90,6 +98,9 @@ class AudioSinkProcessor extends AudioWorkletProcessor {
         break;
       case "close":
         this.#closed = true;
+        if (this.#sinkPort !== this.port) {
+          this.#sinkPort.close();
+        }
         this.#queue.length = 0;
         this.#queuedSeconds = 0;
         break;
@@ -199,7 +210,7 @@ class AudioSinkProcessor extends AudioWorkletProcessor {
       lastConsumedSequence: this.#lastConsumedSequence,
       starved
     };
-    this.port.postMessage(message);
+    this.#sinkPort.postMessage(message);
   }
 }
 

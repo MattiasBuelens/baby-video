@@ -1,19 +1,16 @@
-import audioSinkWorkletUrl from "./audio-sink-processor.ts?worker&url";
 import type {
   AudioSinkDirection,
   AudioSinkInboundMessage,
-  AudioSinkProcessorName,
   AudioSinkStatusMessage
 } from "./audio-sink-messages";
-
-const processorName: AudioSinkProcessorName = "audio-sink";
+import type { AudioClockSnapshot } from "./audio-output";
+import { getAbsoluteTime } from "./util";
 
 export interface BabyAudioSinkInit {
-  readonly sampleRate: number;
+  // The port to the audio worklet, see AudioOutput.
+  readonly port: MessagePort;
   readonly numberOfChannels: number;
   readonly onStatus: (status: AudioSinkStatusMessage) => void;
-  readonly onReady: () => void;
-  readonly onStateChange: (state: AudioContextState) => void;
 }
 
 export interface AudioSinkChunk {
@@ -34,109 +31,81 @@ interface AudioSinkAnchor {
   readonly effectiveRate: number;
 }
 
-// Plays back decoded audio through an AudioWorklet.
+// The media pipeline's side of the audio output.
 //
-// The worklet owns the sample queue, so the main thread merely has to push
-// decoded audio ahead of time. It also owns the playback position: it reports
-// an anchor { mediaTime, contextTime, effectiveRate } which the main thread
-// extrapolates with AudioContext.currentTime, which is exact for as long as the
-// effective rate stays constant.
+// Pushes decoded audio to the audio worklet through a MessagePort. The worklet
+// owns the sample queue, so we merely have to push decoded audio ahead of time.
+// It also owns the playback position: it reports an anchor
+// { mediaTime, contextTime, effectiveRate }, which we extrapolate with
+// our estimate of AudioContext.currentTime. That extrapolation is exact for as
+// long as the effective rate stays constant.
+//
+// The AudioContext itself lives on the main thread (see AudioOutput), so we
+// can't read its currentTime directly. Instead, we extrapolate the latest
+// AudioClockSnapshot that it sent us with the wall clock.
 export class BabyAudioSink {
-  readonly #context: AudioContext;
-  readonly #gainNode: GainNode;
+  readonly #port: MessagePort;
   readonly #onStatus: (status: AudioSinkStatusMessage) => void;
-  readonly #onReady: () => void;
-  readonly #onStateChange: (state: AudioContextState) => void;
   readonly #numberOfChannels: number;
 
-  #node: AudioWorkletNode | undefined;
-  #failed: boolean = false;
   #closed: boolean = false;
   #epoch: number = 0;
   #sequence: number = 0;
   #playbackRate: number = 1;
-  #gain: number = 1;
   #anchor: AudioSinkAnchor | undefined;
+  #clock: AudioClockSnapshot | undefined;
 
   constructor(init: BabyAudioSinkInit) {
+    this.#port = init.port;
     this.#onStatus = init.onStatus;
-    this.#onReady = init.onReady;
-    this.#onStateChange = init.onStateChange;
     this.#numberOfChannels = init.numberOfChannels;
-
-    this.#context = new AudioContext({
-      sampleRate: init.sampleRate,
-      latencyHint: "playback"
+    this.#port.onmessage = (event: MessageEvent) => {
+      this.#onMessage(event.data as AudioSinkStatusMessage);
+    };
+    // Bring the worklet up to date, in case nothing else does.
+    this.#post({
+      type: "flush",
+      epoch: this.#epoch,
+      mediaTime: 0
     });
-    this.#context.addEventListener("statechange", () => {
-      this.#onStateChange(this.#context.state);
-    });
-
-    this.#gainNode = new GainNode(this.#context, { gain: this.#gain });
-    this.#gainNode.connect(this.#context.destination);
-
-    this.#context.audioWorklet
-      .addModule(audioSinkWorkletUrl)
-      .then(() => this.#onModuleLoaded())
-      .catch((error) => this.#onModuleFailed(error));
   }
 
-  get isReady(): boolean {
-    return this.#node !== undefined;
+  get clockState(): AudioClockSnapshot["state"] | undefined {
+    return this.#clock?.state;
   }
 
   get failed(): boolean {
-    return this.#failed;
-  }
-
-  get sampleRate(): number {
-    return this.#context.sampleRate;
+    return this.#clock?.state === "failed";
   }
 
   get numberOfChannels(): number {
     return this.#numberOfChannels;
   }
 
-  #onModuleLoaded(): void {
-    if (this.#closed) {
-      return;
+  // The AudioContext changed state, or sent a new clock snapshot.
+  updateClock(snapshot: AudioClockSnapshot): void {
+    this.#clock = snapshot;
+    if (snapshot.state === "failed") {
+      this.#anchor = undefined;
     }
-    this.#node = new AudioWorkletNode(this.#context, processorName, {
-      numberOfInputs: 0,
-      numberOfOutputs: 1,
-      outputChannelCount: [this.#numberOfChannels]
-    });
-    this.#node.port.onmessage = (event: MessageEvent) => {
-      this.#onMessage(event.data as AudioSinkStatusMessage);
-    };
-    this.#node.connect(this.#gainNode);
-    // Bring the worklet up to date with everything that happened
-    // while the module was still loading.
-    this.#post({
-      type: "flush",
-      epoch: this.#epoch,
-      mediaTime: Math.round(1e6 * (this.#anchor?.mediaTime ?? 0))
-    });
-    this.#post({
-      type: "playback-rate",
-      epoch: this.#epoch,
-      playbackRate: this.#playbackRate
-    });
-    this.#onReady();
   }
 
-  #onModuleFailed(error: unknown): void {
-    // Without a worklet there can be no audio and no audio clock. Give up
-    // permanently: the video element then falls back to the wall clock.
-    console.error("Failed to load the audio worklet module", error);
-    this.#failed = true;
-    this.#anchor = undefined;
+  // Our best estimate of AudioContext.currentTime right now.
+  #getContextTime(): number {
+    const clock = this.#clock;
+    if (clock === undefined) {
+      return 0;
+    }
+    if (clock.state !== "running") {
+      return clock.contextTime;
+    }
+    return clock.contextTime + (getAbsoluteTime() - clock.timestamp) / 1000;
   }
 
   #onMessage(status: AudioSinkStatusMessage): void {
     // Statuses produced before the worklet saw our latest flush are stale:
     // accepting one would rewind the clock to before the seek.
-    if (status.epoch !== this.#epoch) {
+    if (this.#closed || status.epoch !== this.#epoch || this.failed) {
       return;
     }
     this.#anchor = {
@@ -148,7 +117,10 @@ export class BabyAudioSink {
   }
 
   #post(message: AudioSinkInboundMessage, transfer?: Transferable[]): void {
-    this.#node?.port.postMessage(message, transfer ?? []);
+    if (this.#closed) {
+      return;
+    }
+    this.#port.postMessage(message, transfer ?? []);
   }
 
   // Queues a chunk of audio for playback, and returns its sequence number.
@@ -175,16 +147,16 @@ export class BabyAudioSink {
   // Drops all queued audio, and reports the given media time (in microseconds)
   // until new audio arrives.
   flush(mediaTime: number): void {
-    // Bump the epoch even if the worklet does not exist yet, so that any audio
-    // pushed before this flush can never be played.
     this.#epoch++;
     this.#sequence = 0;
     // Pin the clock at the flushed position until the worklet confirms.
-    this.#anchor = {
-      mediaTime: mediaTime / 1e6,
-      contextTime: this.#context.currentTime,
-      effectiveRate: 0
-    };
+    if (!this.failed) {
+      this.#anchor = {
+        mediaTime: mediaTime / 1e6,
+        contextTime: this.#getContextTime(),
+        effectiveRate: 0
+      };
+    }
     this.#post({ type: "flush", epoch: this.#epoch, mediaTime });
   }
 
@@ -199,45 +171,30 @@ export class BabyAudioSink {
     if (mediaTime !== undefined) {
       this.#anchor = {
         mediaTime,
-        contextTime: this.#context.currentTime,
+        contextTime: this.#getContextTime(),
         effectiveRate: playbackRate
       };
     }
     this.#post({ type: "playback-rate", epoch: this.#epoch, playbackRate });
   }
 
-  setGain(gain: number): void {
-    this.#gain = gain;
-    this.#gainNode.gain.value = gain;
-  }
-
   // Returns the current playback position in seconds,
   // or undefined if the audio clock cannot be used right now.
   getPosition(): number | undefined {
-    if (this.#anchor === undefined || this.#context.state !== "running") {
+    if (this.#anchor === undefined || this.#clock?.state !== "running") {
       return undefined;
     }
     const elapsed = Math.max(
       0,
-      this.#context.currentTime - this.#anchor.contextTime
+      this.#getContextTime() - this.#anchor.contextTime
     );
     return this.#anchor.mediaTime + this.#anchor.effectiveRate * elapsed;
   }
 
-  resume(): void {
-    void this.#context.resume();
-  }
-
-  suspend(): void {
-    void this.#context.suspend();
-  }
-
   close(): void {
-    this.#closed = true;
     this.#post({ type: "close" });
-    this.#node?.disconnect();
-    this.#node = undefined;
+    this.#closed = true;
     this.#anchor = undefined;
-    void this.#context.close();
+    this.#port.close();
   }
 }

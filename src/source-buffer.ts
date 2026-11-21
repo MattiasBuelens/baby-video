@@ -20,6 +20,7 @@ import type { BabyMediaSource } from "./media-source";
 import {
   durationChange,
   endOfStream,
+  getBuffered,
   getMediaElement,
   hasSomeBuffer,
   openIfEnded
@@ -29,11 +30,7 @@ import {
   TrackBuffer,
   VideoTrackBuffer
 } from "./track-buffer";
-import {
-  MediaReadyState,
-  notifyProgress,
-  updateReadyState
-} from "./video-element";
+import { MediaReadyState } from "./media-source-attachment";
 import { setEndTimeOnLastRange, TimeRanges } from "./time-ranges";
 
 export let getVideoTrackBuffer: (
@@ -471,7 +468,7 @@ export class BabySourceBuffer extends EventTarget {
       // 8.1. If the HTMLMediaElement.readyState attribute is greater than HAVE_CURRENT_DATA,
       //      then set the HTMLMediaElement.readyState attribute to HAVE_METADATA.
       if (mediaElement.readyState >= MediaReadyState.HAVE_CURRENT_DATA) {
-        updateReadyState(mediaElement, MediaReadyState.HAVE_METADATA);
+        mediaElement.updateReadyState(MediaReadyState.HAVE_METADATA);
       }
       // 9. If each object in sourceBuffers of the parent media source
       //    has [[first initialization segment received flag]] equal to true,
@@ -483,7 +480,7 @@ export class BabySourceBuffer extends EventTarget {
         // 9.1. If the HTMLMediaElement.readyState attribute is HAVE_NOTHING,
         //      then set the HTMLMediaElement.readyState attribute to HAVE_METADATA.
         if (mediaElement.readyState === MediaReadyState.HAVE_NOTHING) {
-          updateReadyState(mediaElement, MediaReadyState.HAVE_METADATA);
+          mediaElement.updateReadyState(MediaReadyState.HAVE_METADATA);
         }
       }
     }
@@ -513,7 +510,7 @@ export class BabySourceBuffer extends EventTarget {
     //    cause HTMLMediaElement.buffered to have a TimeRanges for the current playback position,
     //    then set the HTMLMediaElement.readyState attribute to HAVE_CURRENT_DATA.
     const mediaElement = getMediaElement(this.#parent)!;
-    const buffered = mediaElement.buffered;
+    const buffered = getBuffered(this.#parent);
     const currentTime = mediaElement.currentTime;
     const duration = this.#parent.duration;
     const playbackRate = mediaElement.playbackRate;
@@ -521,7 +518,7 @@ export class BabySourceBuffer extends EventTarget {
       mediaElement.readyState === MediaReadyState.HAVE_METADATA &&
       buffered.contains(currentTime)
     ) {
-      updateReadyState(mediaElement, MediaReadyState.HAVE_CURRENT_DATA);
+      mediaElement.updateReadyState(MediaReadyState.HAVE_CURRENT_DATA);
     }
     // 3. If the HTMLMediaElement.readyState attribute is HAVE_CURRENT_DATA and the new coded frames
     //    cause HTMLMediaElement.buffered to have a TimeRanges that includes the current playback position
@@ -531,7 +528,7 @@ export class BabySourceBuffer extends EventTarget {
       mediaElement.readyState === MediaReadyState.HAVE_CURRENT_DATA &&
       hasSomeBuffer(buffered, currentTime, duration, playbackRate)
     ) {
-      updateReadyState(mediaElement, MediaReadyState.HAVE_FUTURE_DATA);
+      mediaElement.updateReadyState(MediaReadyState.HAVE_FUTURE_DATA);
     }
     // 4. If the HTMLMediaElement.readyState attribute is HAVE_FUTURE_DATA and the new coded frames
     //    cause HTMLMediaElement.buffered to have a TimeRanges that includes the current playback position
@@ -541,7 +538,7 @@ export class BabySourceBuffer extends EventTarget {
     // 5. If the media segment contains data beyond the current duration, then run the duration change
     //    algorithm with new duration set to the maximum of the current duration and the [[group end timestamp]].
     // TODO
-    notifyProgress(mediaElement);
+    mediaElement.notifyProgress();
   }
 
   #processSamples(trackId: number, samples: Sample[]): void {
@@ -667,6 +664,7 @@ export class BabySourceBuffer extends EventTarget {
     queueMicrotask(() => {
       // 6. Run the coded frame removal algorithm with start and end as the start and end of the removal range.
       this.#codedFrameRemoval(start, end);
+      getMediaElement(this.#parent)!.notifyBufferedChange();
       // 7. Set the updating attribute to false.
       this.#updating = false;
       // 8. Queue a task to fire an event named update at this SourceBuffer object.
@@ -717,7 +715,7 @@ export class BabySourceBuffer extends EventTarget {
         currentTimeInMicros < removeEndTimestamp &&
         mediaElement.readyState > MediaReadyState.HAVE_METADATA
       ) {
-        updateReadyState(mediaElement, MediaReadyState.HAVE_METADATA);
+        mediaElement.updateReadyState(MediaReadyState.HAVE_METADATA);
       }
     }
   }

@@ -10,6 +10,9 @@ This is purely for demonstration purposes. Don't use this in production, use a r
 - ▶️ `<baby-video>` custom element behaves like a [`<video>` element](https://developer.mozilla.org/en-US/docs/Web/HTML/Element/video)
 - 🚰 `BabyMediaSource` class behaves like a [`MediaSource`](https://developer.mozilla.org/en-US/docs/Web/API/MediaSource), allowing adaptive streaming
 - ⏪ Supports reverse playback through negative `playbackRate`
+- 🧵 Supports `BabyMediaSource` in a dedicated worker, like [`MediaSourceHandle`](https://developer.mozilla.org/en-US/docs/Web/API/MediaSourceHandle).
+  The whole media pipeline (demuxing, decoding and rendering to an `OffscreenCanvas`) then runs in that worker,
+  and audio goes straight from the worker to an `AudioWorklet`. Try the demo with `?worker`.
 
 ## Talks
 

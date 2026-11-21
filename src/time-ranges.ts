@@ -7,6 +7,10 @@ export class TimeRanges {
     this.#ranges = ranges;
   }
 
+  toArray(): TimeRange[] {
+    return this.#ranges.slice();
+  }
+
   get length(): number {
     return this.#ranges.length;
   }

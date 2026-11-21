@@ -4,21 +4,20 @@ import {
   getVideoTrackBuffer
 } from "./source-buffer";
 import {
-  BabyVideoElement,
   MediaReadyState,
-  notifyEndOfStream,
-  updateDuration,
-  updateReadyState
-} from "./video-element";
+  type MediaSourceAttachment
+} from "./media-source-attachment";
 import { queueTask } from "./util";
 import { AudioTrackBuffer, VideoTrackBuffer } from "./track-buffer";
 import { setEndTimeOnLastRange, TimeRanges } from "./time-ranges";
+import { BabyMediaSourceHandle } from "./media-source-handle";
+import { MediaPipelineEndpoint } from "./media-pipeline-endpoint";
 
 export type MediaSourceReadyState = "closed" | "ended" | "open";
 
 export let attachToMediaElement: (
   mediaSource: BabyMediaSource,
-  mediaElement: BabyVideoElement
+  mediaElement: MediaSourceAttachment
 ) => void;
 export let detachFromMediaElement: (mediaSource: BabyMediaSource) => void;
 export let durationChange: (
@@ -31,7 +30,7 @@ export let endOfStream: (
 ) => void;
 export let getMediaElement: (
   mediaSource: BabyMediaSource
-) => BabyVideoElement | undefined;
+) => MediaSourceAttachment | undefined;
 export let getBuffered: (mediaSource: BabyMediaSource) => TimeRanges;
 export let getActiveVideoTrackBuffer: (
   mediaSource: BabyMediaSource
@@ -44,9 +43,10 @@ export let checkBuffer: (mediaSource: BabyMediaSource) => void;
 
 export class BabyMediaSource extends EventTarget {
   #duration: number = NaN;
-  #mediaElement: BabyVideoElement | undefined;
+  #mediaElement: MediaSourceAttachment | undefined;
   #readyState: MediaSourceReadyState = "closed";
   #sourceBuffers: BabySourceBuffer[] = [];
+  #handle: BabyMediaSourceHandle | undefined;
 
   get duration(): number {
     // https://w3c.github.io/media-source/#dom-mediasource-duration
@@ -87,6 +87,48 @@ export class BabyMediaSource extends EventTarget {
 
   get sourceBuffers(): readonly BabySourceBuffer[] {
     return this.#sourceBuffers;
+  }
+
+  // https://w3c.github.io/media-source/#dom-mediasource-handle
+  // Returns a handle to attach this MediaSource to a <baby-video> element on
+  // another thread, see BabyMediaSourceHandle. Always the same handle.
+  // (The real MediaSource only exposes this in a dedicated worker.)
+  get handle(): BabyMediaSourceHandle {
+    if (this.#handle === undefined) {
+      // The media pipeline lives here, next to the MediaSource.
+      // The element on the other end of the port tells it when to attach.
+      const { port1, port2 } = new MessageChannel();
+      new MediaPipelineEndpoint(this, port2);
+      this.#handle = new BabyMediaSourceHandle(port1);
+    }
+    return this.#handle;
+  }
+
+  // https://w3c.github.io/media-source/#dom-mediasource-canconstructindedicatedworker
+  // Whether a BabyMediaSource in a dedicated worker can be attached to a
+  // <baby-video> element. The media pipeline then runs in that worker too,
+  // so it needs WebCodecs and OffscreenCanvas (with requestAnimationFrame)
+  // there. Can be called from both the window and the worker.
+  static get canConstructInDedicatedWorker(): boolean {
+    if (
+      typeof OffscreenCanvas !== "function" ||
+      typeof VideoDecoder !== "function" ||
+      typeof AudioDecoder !== "function"
+    ) {
+      return false;
+    }
+    if (typeof HTMLCanvasElement === "function") {
+      // In the window: we must be able to start a worker,
+      // and hand it the element's canvas.
+      return (
+        typeof Worker === "function" &&
+        typeof HTMLCanvasElement.prototype.transferControlToOffscreen ===
+          "function"
+      );
+    } else {
+      // In the worker: the pipeline renders frames with requestAnimationFrame.
+      return typeof requestAnimationFrame === "function";
+    }
   }
 
   static isTypeSupported(type: string): boolean {
@@ -141,7 +183,7 @@ export class BabyMediaSource extends EventTarget {
     this.#endOfStream(error);
   }
 
-  #attachToMediaElement(mediaElement: BabyVideoElement): void {
+  #attachToMediaElement(mediaElement: MediaSourceAttachment): void {
     // https://w3c.github.io/media-source/#mediasource-attach
     if (this.#readyState !== "closed") {
       throw new DOMException("Ready state must be closed", "InvalidStateError");
@@ -179,7 +221,7 @@ export class BabyMediaSource extends EventTarget {
     this.#duration = newDuration;
     // 6.1. Update the media element's duration to new duration.
     // 6.1. Run the HTMLMediaElement duration change algorithm.
-    updateDuration(this.#mediaElement!, newDuration);
+    this.#mediaElement!.updateDuration(newDuration);
   }
 
   #endOfStream(error?: "network" | "decode") {
@@ -200,7 +242,7 @@ export class BabyMediaSource extends EventTarget {
       );
       this.#durationChange(largestEndTime);
       // 3.2. Notify the media element that it now has all of the media data.
-      notifyEndOfStream(this.#mediaElement!);
+      this.#mediaElement!.notifyEndOfStream();
       // The buffered ranges now extend to the end of the longest track,
       // so the ready state may have changed. Without this, an element waiting
       // for data at the very end would keep waiting after the stream ends.
@@ -289,7 +331,7 @@ export class BabyMediaSource extends EventTarget {
     // If HTMLMediaElement.buffered does not contain a TimeRanges for the current playback position:
     if (currentRange === undefined) {
       // Set the HTMLMediaElement.readyState attribute to HAVE_METADATA.
-      updateReadyState(mediaElement, MediaReadyState.HAVE_METADATA);
+      mediaElement.updateReadyState(MediaReadyState.HAVE_METADATA);
       // Abort these steps.
       return;
     }
@@ -298,7 +340,7 @@ export class BabyMediaSource extends EventTarget {
     if (this.#readyState === "ended" && currentRange[1] === this.#duration) {
       // Set the HTMLMediaElement.readyState attribute to HAVE_ENOUGH_DATA.
       // Playback may resume at this point if it was previously suspended by a transition to HAVE_CURRENT_DATA.
-      updateReadyState(mediaElement, MediaReadyState.HAVE_ENOUGH_DATA);
+      mediaElement.updateReadyState(MediaReadyState.HAVE_ENOUGH_DATA);
       // Abort these steps.
       return;
     }
@@ -307,7 +349,7 @@ export class BabyMediaSource extends EventTarget {
     if (hasSomeBuffer(buffered, currentTime, duration, playbackRate)) {
       // Set the HTMLMediaElement.readyState attribute to HAVE_FUTURE_DATA.
       // Playback may resume at this point if it was previously suspended by a transition to HAVE_CURRENT_DATA.
-      updateReadyState(mediaElement, MediaReadyState.HAVE_FUTURE_DATA);
+      mediaElement.updateReadyState(MediaReadyState.HAVE_FUTURE_DATA);
       // Abort these steps.
       return;
     }
@@ -316,7 +358,7 @@ export class BabyMediaSource extends EventTarget {
     if (buffered.containsRangeEndingAt(currentTime)) {
       // Set the HTMLMediaElement.readyState attribute to HAVE_CURRENT_DATA.
       // Playback is suspended at this point since the media element doesn't have enough data to advance the media timeline.
-      updateReadyState(mediaElement, MediaReadyState.HAVE_CURRENT_DATA);
+      mediaElement.updateReadyState(MediaReadyState.HAVE_CURRENT_DATA);
       // Abort these steps.
       return;
     }

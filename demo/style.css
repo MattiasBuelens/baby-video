@@ -428,3 +428,15 @@ button[aria-pressed="true"] {
 .event-log-list li[data-type="timeupdate"] {
   opacity: 0.6;
 }
+
+.pipeline-mode {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin: 0.75rem 0 0;
+}
+
+.pipeline-mode a:empty {
+  display: none;
+}
