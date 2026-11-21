@@ -35,6 +35,7 @@ declare global {
     append(): Promise<void>;
     // Both of the above.
     load(): Promise<void>;
+    run(command: SourceCommand): Promise<void>;
     isPosterShown(): boolean;
   }
 }
@@ -49,6 +50,7 @@ window.append = async () => {
   await run!({ type: "append-media" });
   await run!({ type: "end-of-stream" });
 };
+window.run = (command) => run!(command);
 window.load = async () => {
   await window.attach();
   await window.append();

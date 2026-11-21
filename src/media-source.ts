@@ -277,6 +277,9 @@ export class BabyMediaSource extends EventTarget {
     if (this.#readyState === "ended") {
       // Set the readyState attribute of the parent media source to "open"
       this.#readyState = "open";
+      // More media data may follow, so the media element no longer has all of it.
+      // (Otherwise, it would still consider the old end as the end of the media resource.)
+      this.#mediaElement?.notifyStreamReopened();
       // Queue a task to fire an event named sourceopen at the parent media source.
       this.dispatchEvent(new Event("sourceopen"));
     }

@@ -105,6 +105,9 @@ export class MediaPipelineProxy {
       case "end-of-stream":
         host.onEndOfStream();
         break;
+      case "stream-reopened":
+        host.onStreamReopened();
+        break;
       case "time-update":
         if (message.epoch === this.#seekEpoch) {
           host.onTimeUpdate(message.currentTime, message.isNormalPlayback);

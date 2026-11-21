@@ -85,6 +85,10 @@ export interface PipelineEndOfStreamMessage {
   readonly type: "end-of-stream";
 }
 
+export interface PipelineStreamReopenedMessage {
+  readonly type: "stream-reopened";
+}
+
 export interface PipelineTimeUpdateMessage {
   readonly type: "time-update";
   // The epoch of the last seek the pipeline saw.
@@ -137,6 +141,7 @@ export type PipelineEventMessage =
   | PipelineProgressMessage
   | PipelineBufferedMessage
   | PipelineEndOfStreamMessage
+  | PipelineStreamReopenedMessage
   | PipelineTimeUpdateMessage
   | PipelineSeekCompleteMessage
   | PipelineResizeMessage

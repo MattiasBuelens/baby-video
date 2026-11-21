@@ -39,6 +39,7 @@ let updateReadyState: (
 let updateDuration: (element: BabyVideoElement, duration: number) => void;
 let notifyProgress: (element: BabyVideoElement) => void;
 let notifyEndOfStream: (element: BabyVideoElement) => void;
+let notifyStreamReopened: (element: BabyVideoElement) => void;
 let onTimeUpdate: (
   element: BabyVideoElement,
   currentTime: number,
@@ -1510,6 +1511,14 @@ export class BabyVideoElement extends HTMLElement {
 
   #notifyEndOfStream(): void {
     this.#isEndOfStream = true;
+    // We may already be at the (new) end of the media resource.
+    this.#updateEnded();
+  }
+
+  #notifyStreamReopened(): void {
+    this.#isEndOfStream = false;
+    // The old end is no longer the end of the media resource.
+    this.#updateEnded();
   }
 
   #onVideoFramePresented(frame: PresentedVideoFrame): void {
@@ -1603,6 +1612,7 @@ export class BabyVideoElement extends HTMLElement {
     updateDuration = (element, duration) => element.#updateDuration(duration);
     notifyProgress = (element) => element.#notifyProgress();
     notifyEndOfStream = (element) => element.#notifyEndOfStream();
+    notifyStreamReopened = (element) => element.#notifyStreamReopened();
     onTimeUpdate = (element, currentTime, isNormalPlayback) =>
       element.#onTimeUpdate(currentTime, isNormalPlayback);
     onSeekComplete = (element) => element.#onSeekComplete();
@@ -1649,6 +1659,10 @@ class BabyVideoElementPipelineHost implements MediaPipelineHost {
 
   onEndOfStream(): void {
     if (this.#isCurrent()) notifyEndOfStream(this.#element);
+  }
+
+  onStreamReopened(): void {
+    if (this.#isCurrent()) notifyStreamReopened(this.#element);
   }
 
   onTimeUpdate(currentTime: number, isNormalPlayback: boolean): void {
