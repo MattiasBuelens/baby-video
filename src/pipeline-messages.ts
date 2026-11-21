@@ -8,7 +8,7 @@
 import type { TimeRange } from "./time-ranges";
 import type { MediaReadyState } from "./media-source-attachment";
 import type { AudioClockSnapshot } from "./audio-output";
-import type { PresentedVideoFrame } from "./media-pipeline";
+import type { MediaPipelineError, PresentedVideoFrame } from "./media-pipeline";
 
 // region Element to pipeline
 
@@ -116,6 +116,13 @@ export interface PipelineVideoFramesDroppedMessage {
   readonly droppedFrames: number;
 }
 
+// https://html.spec.whatwg.org/multipage/media.html#media-data-processing-steps-list
+export interface PipelineErrorMessage {
+  readonly type: "error";
+  readonly error: MediaPipelineError;
+  readonly message: string;
+}
+
 export interface PipelineCreateAudioOutputMessage {
   readonly type: "create-audio-output";
   readonly sampleRate: number;
@@ -135,6 +142,7 @@ export type PipelineEventMessage =
   | PipelineResizeMessage
   | PipelineVideoFramePresentedMessage
   | PipelineVideoFramesDroppedMessage
+  | PipelineErrorMessage
   | PipelineCreateAudioOutputMessage;
 
 // endregion

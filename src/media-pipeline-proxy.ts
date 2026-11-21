@@ -124,6 +124,9 @@ export class MediaPipelineProxy {
       case "video-frames-dropped":
         host.onVideoFramesDropped(message.droppedFrames);
         break;
+      case "error":
+        host.onError(message.error, message.message);
+        break;
       case "create-audio-output":
         host.createAudioOutput({
           sampleRate: message.sampleRate,

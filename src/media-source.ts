@@ -15,10 +15,12 @@ import { MediaPipelineEndpoint } from "./media-pipeline-endpoint";
 
 export type MediaSourceReadyState = "closed" | "ended" | "open";
 
+// Returns false if the media element must run the dedicated media source
+// failure steps instead.
 export let attachToMediaElement: (
   mediaSource: BabyMediaSource,
   mediaElement: MediaSourceAttachment
-) => void;
+) => boolean;
 export let detachFromMediaElement: (mediaSource: BabyMediaSource) => void;
 export let durationChange: (
   mediaSource: BabyMediaSource,
@@ -183,10 +185,14 @@ export class BabyMediaSource extends EventTarget {
     this.#endOfStream(error);
   }
 
-  #attachToMediaElement(mediaElement: MediaSourceAttachment): void {
+  #attachToMediaElement(mediaElement: MediaSourceAttachment): boolean {
     // https://w3c.github.io/media-source/#mediasource-attach
+    // If readyState is NOT set to "closed":
+    //   Run the "If the media data cannot be fetched at all, due to network errors, causing the user agent
+    //   to give up trying to fetch the resource" steps of the resource fetch algorithm's media data processing steps list.
+    // (The media element runs those, see BabyVideoElement.)
     if (this.#readyState !== "closed") {
-      throw new DOMException("Ready state must be closed", "InvalidStateError");
+      return false;
     }
     // Otherwise, the MediaSource was constructed in a Window:
     this.#mediaElement = mediaElement;
@@ -194,6 +200,7 @@ export class BabyMediaSource extends EventTarget {
     this.#readyState = "open";
     // 5. Queue a task to fire an event named sourceopen at the MediaSource.
     queueTask(() => this.dispatchEvent(new Event("sourceopen")));
+    return true;
   }
 
   #detachFromMediaElement(): void {
@@ -247,10 +254,20 @@ export class BabyMediaSource extends EventTarget {
       // so the ready state may have changed. Without this, an element waiting
       // for data at the very end would keep waiting after the stream ends.
       this.#checkBuffer();
-    } else if (error === "network") {
-      // TODO
-    } else if (error === "decode") {
-      // TODO
+    } else {
+      // If error is set to "network" or "decode":
+      // Use the mirror if necessary algorithm to run the following steps in Window:
+      //   If the HTMLMediaElement's readyState attribute equals HAVE_NOTHING:
+      //     Run the "If the media data cannot be fetched at all" steps (for "network"),
+      //     or the "If the media data can be fetched but is found by inspection to be in
+      //     an unsupported format" steps (for "decode") of the resource fetch algorithm's
+      //     media data processing steps list.
+      //   If the HTMLMediaElement's readyState attribute is greater than HAVE_NOTHING:
+      //     Run the "If the connection is interrupted after some media data has been received" steps
+      //     (for "network"), or the "If the media data is corrupted" steps (for "decode") of
+      //     the resource fetch algorithm's media data processing steps list.
+      // (The media element lives in the Window, so it picks the steps.)
+      this.#mediaElement!.notifyEndOfStreamError(error);
     }
   }
 

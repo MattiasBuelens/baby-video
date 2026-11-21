@@ -13,6 +13,8 @@ This is purely for demonstration purposes. Don't use this in production, use a r
 - 🧵 Supports `BabyMediaSource` in a dedicated worker, like [`MediaSourceHandle`](https://developer.mozilla.org/en-US/docs/Web/API/MediaSourceHandle).
   The whole media pipeline (demuxing, decoding and rendering to an `OffscreenCanvas`) then runs in that worker,
   and audio goes straight from the worker to an `AudioWorklet`. Try the demo with `?worker`.
+- 💥 Reports errors like a real media element: `error` (a `BabyMediaError`), the `error` event and `networkState`,
+  for `MediaSource.endOfStream()` with an error, append errors and decoder errors. `load()` runs the media element load algorithm.
 - 🎞️ Supports [`requestVideoFrameCallback()`](https://developer.mozilla.org/en-US/docs/Web/API/HTMLVideoElement/requestVideoFrameCallback)
   and [`getVideoPlaybackQuality()`](https://developer.mozilla.org/en-US/docs/Web/API/HTMLVideoElement/getVideoPlaybackQuality).
   With the pipeline in a worker, the element hears about each new frame one message later,

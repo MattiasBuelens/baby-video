@@ -12,8 +12,11 @@ test("attach and detach a MediaSource in a worker", async ({ page }) => {
     sameHandle: true,
     // Like a real MediaSourceHandle, a handle can only be transferred once...
     secondTransferError: "DataCloneError",
-    // ...and only be attached once.
-    secondAttachError: "InvalidStateError",
+    // ...and only be attached once. Loading a used handle fails with
+    // MEDIA_ERR_SRC_NOT_SUPPORTED, and rejects pending play promises.
+    secondAttachError: "NotSupportedError",
+    secondAttachErrorCode: 4,
+    secondAttachNetworkState: 3,
     messages: ["handle", "info", "sourceopen", "sourceclose"]
   });
 });

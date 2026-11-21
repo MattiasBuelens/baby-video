@@ -5,6 +5,7 @@ import { TimeRange, TimeRanges } from "./time-ranges";
 import { MediaReadyState } from "./media-source-attachment";
 import type {
   MediaPipelineAudioOutputInit,
+  MediaPipelineError,
   MediaPipelineHost,
   PresentedVideoFrame
 } from "./media-pipeline";
@@ -12,6 +13,7 @@ import { MediaPipelineEndpoint } from "./media-pipeline-endpoint";
 import { MediaPipelineProxy } from "./media-pipeline-proxy";
 import type { BabyMediaSourceHandle } from "./media-source-handle";
 import { BabyVideoPlaybackQuality } from "./video-playback-quality";
+import { BabyMediaError } from "./media-error";
 
 // Ports of handles that were already attached to an element.
 // A handle can only be used once.
@@ -56,10 +58,37 @@ let onVideoFramesDropped: (
   element: BabyVideoElement,
   droppedFrames: number
 ) => void;
+let onPipelineError: (
+  element: BabyVideoElement,
+  error: MediaPipelineError,
+  message: string
+) => void;
 let createAudioOutput: (
   element: BabyVideoElement,
   init: MediaPipelineAudioOutputInit
 ) => void;
+
+// https://html.spec.whatwg.org/multipage/media.html#dom-media-networkstate
+const enum NetworkState {
+  NETWORK_EMPTY = 0,
+  NETWORK_IDLE = 1,
+  NETWORK_LOADING = 2,
+  NETWORK_NO_SOURCE = 3
+}
+
+// A task queued on the media element event task source.
+// https://html.spec.whatwg.org/multipage/media.html#queue-a-media-element-task
+class MediaElementTask {
+  readonly steps: () => void;
+  // For a task that would resolve or reject pending play promises: settles
+  // those promises, without running the rest of the task.
+  readonly settlePlayPromises: (() => void) | undefined;
+
+  constructor(steps: () => void, settlePlayPromises?: () => void) {
+    this.steps = steps;
+    this.settlePlayPromises = settlePlayPromises;
+  }
+}
 
 // A partial re-implementation of the HTML <video> element.
 //
@@ -68,6 +97,27 @@ let createAudioOutput: (
 // rendering and the playback clock) lives in the MediaPipeline, which reports
 // back through MediaPipelineHost.
 export class BabyVideoElement extends HTMLElement {
+  // https://html.spec.whatwg.org/multipage/media.html#htmlmediaelement
+  static readonly NETWORK_EMPTY = 0;
+  static readonly NETWORK_IDLE = 1;
+  static readonly NETWORK_LOADING = 2;
+  static readonly NETWORK_NO_SOURCE = 3;
+  static readonly HAVE_NOTHING = 0;
+  static readonly HAVE_METADATA = 1;
+  static readonly HAVE_CURRENT_DATA = 2;
+  static readonly HAVE_FUTURE_DATA = 3;
+  static readonly HAVE_ENOUGH_DATA = 4;
+
+  declare readonly NETWORK_EMPTY: 0;
+  declare readonly NETWORK_IDLE: 1;
+  declare readonly NETWORK_LOADING: 2;
+  declare readonly NETWORK_NO_SOURCE: 3;
+  declare readonly HAVE_NOTHING: 0;
+  declare readonly HAVE_METADATA: 1;
+  declare readonly HAVE_CURRENT_DATA: 2;
+  declare readonly HAVE_FUTURE_DATA: 3;
+  declare readonly HAVE_ENOUGH_DATA: 4;
+
   #canvas: HTMLCanvasElement;
   // Whether #canvas has transferred control to an OffscreenCanvas.
   #canvasTransferred: boolean = false;
@@ -75,6 +125,14 @@ export class BabyVideoElement extends HTMLElement {
   #currentTime: number = 0;
   #duration: number = NaN;
   #ended: boolean = false;
+  #error: BabyMediaError | null = null;
+  #networkState: NetworkState = NetworkState.NETWORK_EMPTY;
+  // Tasks queued on the media element event task source that haven't run yet.
+  // The media element load algorithm discards them.
+  #pendingTasks: Set<MediaElementTask> = new Set();
+  // Identifies the running instance of the resource selection algorithm,
+  // so the media element load algorithm can abort it.
+  #resourceSelectionId: number = 0;
   #muted: boolean = false;
   #paused: boolean = true;
   #playbackRate: number = 1;
@@ -95,6 +153,8 @@ export class BabyVideoElement extends HTMLElement {
   #isEndOfStream: boolean = false;
 
   #pipeline: MediaPipelineProxy | undefined;
+  // The pipeline's end of the port, if the pipeline is on the main thread.
+  #pipelineEndpoint: MediaPipelineEndpoint | undefined;
   #pipelineHost: MediaPipelineHost | undefined;
   #audioOutput: AudioOutput | undefined;
   #audioOutputPlaying: boolean = false;
@@ -290,31 +350,96 @@ export class BabyVideoElement extends HTMLElement {
         "srcObject must be a BabyMediaSource or a BabyMediaSourceHandle"
       );
     }
-    if (
-      srcObject !== undefined &&
-      !(srcObject instanceof BabyMediaSource) &&
-      usedHandlePorts.has(srcObject.port)
-    ) {
-      throw new DOMException(
-        "This BabyMediaSourceHandle was already used",
-        "InvalidStateError"
-      );
-    }
-    this.#pipeline?.detach();
-    this.#pipeline = undefined;
-    this.#pipelineHost = undefined;
-    this.#audioOutput?.close();
-    this.#audioOutput = undefined;
-    this.#audioOutputPlaying = false;
+    // On setting, it must set the element's assigned media provider object to the new value,
+    // and then invoke the element's media element load algorithm.
     this.#srcObject = srcObject;
-    this.#currentTime = 0;
-    this.#duration = NaN;
+    this.#mediaElementLoadAlgorithm();
+  }
+
+  // https://html.spec.whatwg.org/multipage/media.html#dom-media-error
+  get error(): BabyMediaError | null {
+    return this.#error;
+  }
+
+  // https://html.spec.whatwg.org/multipage/media.html#dom-media-networkstate
+  get networkState(): number {
+    return this.#networkState;
+  }
+
+  // https://html.spec.whatwg.org/multipage/media.html#dom-media-load
+  load(): void {
+    // The load() method steps are to invoke the media element load algorithm.
+    this.#mediaElementLoadAlgorithm();
+  }
+
+  // https://html.spec.whatwg.org/multipage/media.html#media-element-load-algorithm
+  #mediaElementLoadAlgorithm(): void {
+    // 1. Set this element's is currently stalled to false.
+    // (We don't track stalls.)
+    // 2. Abort any already-running instance of the resource selection algorithm for this element.
+    this.#resourceSelectionId++;
+    // 3. Let pending tasks be a list of all tasks from the media element's media element event task source
+    //    in one of the task queues.
+    // 4. For each task in pending tasks that would resolve pending play promises or reject pending play promises,
+    //    immediately resolve or reject those promises in the order the corresponding tasks were queued.
+    // 5. Remove each task in pending tasks from its task queue.
+    this.#discardPendingTasks();
+    // 6. If the media element's networkState is set to NETWORK_LOADING or NETWORK_IDLE,
+    //    queue a media element task given the media element to fire an event named abort at the media element.
+    if (
+      this.#networkState === NetworkState.NETWORK_LOADING ||
+      this.#networkState === NetworkState.NETWORK_IDLE
+    ) {
+      this.#queueMediaElementTask(() => this.dispatchEvent(new Event("abort")));
+    }
+    // 7. If the media element's networkState is not set to NETWORK_EMPTY, then:
+    if (this.#networkState !== NetworkState.NETWORK_EMPTY) {
+      // 7.1. Queue a media element task given the media element to fire an event named emptied at the media element.
+      this.#queueMediaElementTask(() =>
+        this.dispatchEvent(new Event("emptied"))
+      );
+      // 7.2. If a fetching process is in progress for the media element, the user agent should stop it.
+      // 7.3. If the media element's assigned media provider object is a MediaSource object, then detach it.
+      this.#detachPipeline();
+      // 7.4. Forget the media element's media-resource-specific tracks.
+      // 7.5. If readyState is not set to HAVE_NOTHING, then set it to that state.
+      this.#readyState = MediaReadyState.HAVE_NOTHING;
+      // 7.6. If the paused attribute is false, then:
+      if (!this.#paused) {
+        // 7.6.1. Set the paused attribute to true.
+        this.#paused = true;
+        // 7.6.2. Take pending play promises and reject pending play promises with the result
+        //        and an "AbortError" DOMException.
+        const error = new DOMException(
+          "Aborted by loading a new media resource",
+          "AbortError"
+        );
+        this.#takePendingPlayPromises().forEach((deferred) =>
+          deferred.reject(error)
+        );
+      }
+      // 7.7. If seeking is true, set it to false.
+      this.#seeking = false;
+      // 7.8. Set the current playback position to 0.
+      //      Set the official playback position to 0.
+      //      If this changed the official playback position, then queue a media element task given the media element
+      //      to fire an event named timeupdate at the media element.
+      if (this.#currentTime !== 0) {
+        this.#currentTime = 0;
+        this.#queueMediaElementTask(() =>
+          this.dispatchEvent(new Event("timeupdate"))
+        );
+      }
+      // 7.9. Set the timeline offset to Not-a-Number (NaN).
+      // 7.10. Update the duration attribute to Not-a-Number (NaN).
+      this.#duration = NaN;
+    }
+    // Reset everything else that belongs to the previous media resource.
+    // (With a networkState of NETWORK_EMPTY, there was no media resource,
+    // so most of this is already reset.)
     this.#hasFiredLoadedData = false;
     this.#ended = false;
-    this.#paused = true;
     this.#played = new TimeRanges([]);
-    this.#readyState = MediaReadyState.HAVE_NOTHING;
-    this.#seeking = false;
     this.#isEndOfStream = false;
     this.#lastProgress = 0;
     this.#lastPlayedTime = NaN;
@@ -327,29 +452,215 @@ export class BabyVideoElement extends HTMLElement {
     this.#droppedVideoFrameCount = 0;
     // There's no frame from the new source yet.
     this.#latestPresentedFrame = undefined;
-    queueTask(() => this.dispatchEvent(new Event("emptied")));
-    if (srcObject) {
-      this.#pipelineHost = new BabyVideoElementPipelineHost(this);
-      // The element only ever talks to the pipeline through a message port.
-      // The pipeline lives next to the MediaSource.
-      if (srcObject instanceof BabyMediaSource) {
-        // The MediaSource is right here, on the main thread,
-        // so the pipeline can render to our own canvas directly.
-        const { port1, port2 } = new MessageChannel();
-        new MediaPipelineEndpoint(srcObject, port2).attach(
-          this.#getCanvas(),
-          this.#playbackRate
-        );
-        this.#pipeline = new MediaPipelineProxy(port1, this.#pipelineHost);
-      } else {
-        // The MediaSource is in a worker, at the other end of the handle's port.
-        usedHandlePorts.add(srcObject.port);
-        this.#pipeline = new MediaPipelineProxy(
-          srcObject.port,
-          this.#pipelineHost
-        );
-        this.#pipeline.attach(this.#transferCanvas(), this.#playbackRate);
+    // 8. Set the playbackRate attribute to the value of the defaultPlaybackRate attribute.
+    // (We don't have defaultPlaybackRate yet, so keep the playbackRate.)
+    // 9. Set the error attribute to null and the can autoplay flag to true.
+    this.#error = null;
+    // 10. Invoke the media element's resource selection algorithm.
+    this.#resourceSelectionAlgorithm();
+  }
+
+  // Detaches the media pipeline (and with it, the MediaSource), if any.
+  #detachPipeline(): void {
+    this.#pipeline?.detach();
+    this.#pipeline = undefined;
+    this.#pipelineEndpoint?.detach();
+    this.#pipelineEndpoint = undefined;
+    this.#pipelineHost = undefined;
+    this.#audioOutput?.close();
+    this.#audioOutput = undefined;
+    this.#audioOutputPlaying = false;
+  }
+
+  // https://html.spec.whatwg.org/multipage/media.html#concept-media-load-algorithm
+  #resourceSelectionAlgorithm(): void {
+    // 1. Set the element's networkState attribute to the NETWORK_NO_SOURCE value.
+    this.#networkState = NetworkState.NETWORK_NO_SOURCE;
+    // 2. Set the element's show poster flag to true.
+    // (We don't have a poster yet.)
+    // 3. Await a stable state, allowing the task that invoked this algorithm to continue.
+    //    The synchronous section consists of all the remaining steps of this algorithm
+    //    until the algorithm says the synchronous section has ended.
+    const resourceSelectionId = this.#resourceSelectionId;
+    queueMicrotask(() => {
+      if (resourceSelectionId !== this.#resourceSelectionId) {
+        // The media element load algorithm aborted us.
+        return;
       }
+      // 6. ⌛ If the media element's assigned media provider object is not null, then set mode to object.
+      const srcObject = this.#srcObject;
+      if (srcObject === undefined) {
+        // 6. ⌛ Otherwise: (We don't support the src attribute or source children.)
+        // 6.1. ⌛ Set the networkState to NETWORK_EMPTY.
+        this.#networkState = NetworkState.NETWORK_EMPTY;
+        // 6.3. End the synchronous section and return.
+        return;
+      }
+      // 7. ⌛ Set the media element's networkState to NETWORK_LOADING.
+      this.#networkState = NetworkState.NETWORK_LOADING;
+      // 8. ⌛ Queue a media element task given the media element to fire an event named loadstart at the media element.
+      this.#queueMediaElementTask(() =>
+        this.dispatchEvent(new Event("loadstart"))
+      );
+      // 9. Run the appropriate steps from the following list:
+      //    If mode is object:
+      //    1. ⌛ Set the currentSrc attribute to the empty string.
+      //    2. End the synchronous section, continuing the remaining steps in parallel.
+      //    3. Run the resource fetch algorithm with the assigned media provider object.
+      this.#resourceFetchAlgorithm(srcObject);
+    });
+  }
+
+  // https://html.spec.whatwg.org/multipage/media.html#concept-media-load-resource
+  // With a MediaSource, this attaches it to the media element.
+  // https://w3c.github.io/media-source/#mediasource-attach
+  #resourceFetchAlgorithm(
+    srcObject: BabyMediaSource | BabyMediaSourceHandle
+  ): void {
+    // If the media provider object is a MediaSourceHandle whose underlying MediaSource's
+    // [[has ever been attached]] internal slot is true:
+    //   Run the "If the media data cannot be fetched at all, due to network errors, causing the user agent
+    //   to give up trying to fetch the resource" steps of the resource fetch algorithm's media data processing steps list.
+    if (
+      !(srcObject instanceof BabyMediaSource) &&
+      usedHandlePorts.has(srcObject.port)
+    ) {
+      this.#mediaDataCannotBeFetched(
+        "This BabyMediaSourceHandle was already used"
+      );
+      return;
+    }
+    this.#pipelineHost = new BabyVideoElementPipelineHost(this);
+    // The element only ever talks to the pipeline through a message port.
+    // The pipeline lives next to the MediaSource.
+    if (srcObject instanceof BabyMediaSource) {
+      // The MediaSource is right here, on the main thread,
+      // so the pipeline can render to our own canvas directly.
+      const { port1, port2 } = new MessageChannel();
+      this.#pipelineEndpoint = new MediaPipelineEndpoint(srcObject, port2);
+      this.#pipelineEndpoint.attach(this.#getCanvas(), this.#playbackRate);
+      this.#pipeline = new MediaPipelineProxy(port1, this.#pipelineHost);
+    } else {
+      // The MediaSource is in a worker, at the other end of the handle's port.
+      usedHandlePorts.add(srcObject.port);
+      this.#pipeline = new MediaPipelineProxy(
+        srcObject.port,
+        this.#pipelineHost
+      );
+      this.#pipeline.attach(this.#transferCanvas(), this.#playbackRate);
+    }
+  }
+
+  // https://html.spec.whatwg.org/multipage/media.html#media-data-processing-steps-list
+  // The pipeline stopped because of a fatal error.
+  #onPipelineError(error: MediaPipelineError, message: string): void {
+    if (error === "unsupported") {
+      // The MediaSource could not be attached, so there's nothing to detach.
+      // (Otherwise, the pipeline would report the buffered ranges of
+      // a MediaSource that's attached to another element.)
+      this.#detachPipeline();
+      this.#mediaDataCannotBeFetched(message);
+    } else if (this.#readyState === MediaReadyState.HAVE_NOTHING) {
+      // https://w3c.github.io/media-source/#end-of-stream-algorithm
+      // If the HTMLMediaElement's readyState attribute equals HAVE_NOTHING:
+      //   Run the "If the media data cannot be fetched at all" steps (for "network"), or
+      //   the "If the media data can be fetched but is found by inspection to be in an unsupported format" steps
+      //   (for "decode").
+      this.#mediaDataCannotBeFetched(message);
+    } else {
+      // If the HTMLMediaElement's readyState attribute is greater than HAVE_NOTHING:
+      //   Run the "If the connection is interrupted after some media data has been received" steps (for "network"),
+      //   or the "If the media data is corrupted" steps (for "decode").
+      this.#fatalMediaDataError(
+        error === "network"
+          ? BabyMediaError.MEDIA_ERR_NETWORK
+          : BabyMediaError.MEDIA_ERR_DECODE,
+        message
+      );
+    }
+  }
+
+  // https://html.spec.whatwg.org/multipage/media.html#media-data-processing-steps-list
+  // "If the media data cannot be fetched at all, due to network errors, causing the user agent to give up
+  //  trying to fetch the resource", and "If the media data can be fetched but is found by inspection to be
+  //  in an unsupported format, or can otherwise not be rendered at all":
+  #mediaDataCannotBeFetched(message: string): void {
+    // 1. The user agent should cancel the fetching process.
+    // 2. Abort this subalgorithm, returning to the resource selection algorithm.
+    // https://html.spec.whatwg.org/multipage/media.html#concept-media-load-algorithm
+    // 9. If mode is object:
+    // 4. Failed with media provider: Reaching this step indicates that the media resource failed to load.
+    //    Take pending play promises and queue a media element task given the media element
+    //    to run the dedicated media source failure steps with the result.
+    const promises = this.#takePendingPlayPromises();
+    const error = new DOMException(message, "NotSupportedError");
+    this.#queueMediaElementTask(
+      () => this.#dedicatedMediaSourceFailureSteps(promises, message),
+      () => promises.forEach((deferred) => deferred.reject(error))
+    );
+  }
+
+  // https://html.spec.whatwg.org/multipage/media.html#dedicated-media-source-failure-steps
+  #dedicatedMediaSourceFailureSteps(
+    promises: Array<Deferred<void>>,
+    message: string
+  ): void {
+    // 1. Set the error attribute to the result of creating a MediaError with MEDIA_ERR_SRC_NOT_SUPPORTED.
+    this.#error = new BabyMediaError(
+      BabyMediaError.MEDIA_ERR_SRC_NOT_SUPPORTED,
+      message
+    );
+    // 2. Forget the media element's media-resource-specific tracks.
+    // 3. Set the element's networkState attribute to the NETWORK_NO_SOURCE value.
+    this.#networkState = NetworkState.NETWORK_NO_SOURCE;
+    // 4. Set the element's show poster flag to true.
+    // 5. Fire an event named error at the media element.
+    this.dispatchEvent(new Event("error"));
+    // 6. Reject pending play promises with promises and a "NotSupportedError" DOMException.
+    const error = new DOMException(message, "NotSupportedError");
+    promises.forEach((deferred) => deferred.reject(error));
+    // 7. Set the element's delaying-the-load-event flag to false.
+  }
+
+  // https://html.spec.whatwg.org/multipage/media.html#media-data-processing-steps-list
+  // "If the connection is interrupted after some media data has been received, causing the user agent to give up
+  //  trying to fetch the resource", and "If the media data is corrupted":
+  #fatalMediaDataError(code: number, message: string): void {
+    // 1. The user agent should cancel the fetching process.
+    // (The pipeline already stopped.)
+    // 2. Set the error attribute to the result of creating a MediaError with MEDIA_ERR_NETWORK (or MEDIA_ERR_DECODE).
+    this.#error = new BabyMediaError(code, message);
+    // 3. Set the element's networkState attribute to the NETWORK_IDLE value.
+    this.#networkState = NetworkState.NETWORK_IDLE;
+    // 4. Set the element's delaying-the-load-event flag to false.
+    // 5. Fire an event named error at the media element.
+    this.dispatchEvent(new Event("error"));
+    // 6. Abort the overall resource selection algorithm.
+    // (The pipeline stays attached, but won't report anything anymore.)
+  }
+
+  // https://html.spec.whatwg.org/multipage/media.html#queue-a-media-element-task
+  #queueMediaElementTask(
+    steps: () => void,
+    settlePlayPromises?: () => void
+  ): void {
+    const task = new MediaElementTask(steps, settlePlayPromises);
+    this.#pendingTasks.add(task);
+    queueTask(() => {
+      // Skip tasks that the media element load algorithm removed.
+      if (this.#pendingTasks.delete(task)) {
+        task.steps();
+      }
+    });
+  }
+
+  // https://html.spec.whatwg.org/multipage/media.html#media-element-load-algorithm (steps 3 to 5)
+  #discardPendingTasks(): void {
+    // A Set iterates in insertion order, i.e. in the order the tasks were queued.
+    const pendingTasks = [...this.#pendingTasks];
+    this.#pendingTasks.clear();
+    for (const task of pendingTasks) {
+      task.settlePlayPromises?.();
     }
   }
 
@@ -418,10 +729,6 @@ export class BabyVideoElement extends HTMLElement {
     }
   }
 
-  load(): void {
-    // TODO
-  }
-
   play(): Promise<void> {
     // https://html.spec.whatwg.org/multipage/media.html#dom-media-play
     // 3. Let promise be a new promise and append promise to the list of pending play promises.
@@ -445,12 +752,15 @@ export class BabyVideoElement extends HTMLElement {
     // 1. Take pending play promises and let promises be the result.
     const promises = this.#takePendingPlayPromises();
     // 2. Queue a media element task given the element and the following steps:
-    queueTask(() => {
-      // 2.1. Fire an event named playing at the element.
-      this.dispatchEvent(new Event("playing"));
-      // 2.2. Resolve pending play promises with promises.
-      promises.forEach((deferred) => deferred.resolve());
-    });
+    this.#queueMediaElementTask(
+      () => {
+        // 2.1. Fire an event named playing at the element.
+        this.dispatchEvent(new Event("playing"));
+        // 2.2. Resolve pending play promises with promises.
+        promises.forEach((deferred) => deferred.resolve());
+      },
+      () => promises.forEach((deferred) => deferred.resolve())
+    );
     this.#updatePlaying();
   }
 
@@ -472,11 +782,13 @@ export class BabyVideoElement extends HTMLElement {
       this.#paused = false;
       this.#updatePlayed();
       // 3.3. Queue a media element task given the media element to fire an event named play at the element.
-      queueTask(() => this.dispatchEvent(new Event("play")));
+      this.#queueMediaElementTask(() => this.dispatchEvent(new Event("play")));
       if (this.#readyState <= MediaReadyState.HAVE_CURRENT_DATA) {
         // 3.4. If the media element's readyState attribute has the value HAVE_NOTHING, HAVE_METADATA, or HAVE_CURRENT_DATA,
         //      queue a media element task given the media element to fire an event named waiting at the element.
-        queueTask(() => this.dispatchEvent(new Event("waiting")));
+        this.#queueMediaElementTask(() =>
+          this.dispatchEvent(new Event("waiting"))
+        );
       } else {
         // 3.4. Otherwise, the media element's readyState attribute has the value HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA:
         //      notify about playing for the element.
@@ -487,7 +799,8 @@ export class BabyVideoElement extends HTMLElement {
       //    take pending play promises and queue a media element task given the media element
       //    to resolve pending play promises with the result.
       const promises = this.#takePendingPlayPromises();
-      queueTask(() => promises.forEach((deferred) => deferred.resolve()));
+      const resolve = () => promises.forEach((deferred) => deferred.resolve());
+      this.#queueMediaElementTask(resolve, resolve);
     }
   }
 
@@ -507,22 +820,25 @@ export class BabyVideoElement extends HTMLElement {
       // 2.2. Take pending play promises and let promises be the result.
       const promises = this.#takePendingPlayPromises();
       // 2.3. Queue a media element task given the media element and the following steps:
-      queueTask(() => {
-        // 2.3.1. Fire an event named timeupdate at the element.
-        this.dispatchEvent(new Event("timeupdate"));
-        // 2.3.2. Fire an event named pause at the element.
-        this.dispatchEvent(new Event("pause"));
-        // 2.3.3. Reject pending play promises with promises and an "AbortError" DOMException.
-        const error = new DOMException(
-          "Aborted by a call to pause()",
-          "AbortError"
-        );
-        promises.forEach((deferred) => deferred.reject(error));
-        // 2.4. Set the official playback position to the current playback position.
-        // (The pipeline reports the current playback position when it stops
-        // playing, see #updatePlaying() below.)
-        this.#timeMarchesOn(false, performance.now());
-      });
+      const error = new DOMException(
+        "Aborted by a call to pause()",
+        "AbortError"
+      );
+      this.#queueMediaElementTask(
+        () => {
+          // 2.3.1. Fire an event named timeupdate at the element.
+          this.dispatchEvent(new Event("timeupdate"));
+          // 2.3.2. Fire an event named pause at the element.
+          this.dispatchEvent(new Event("pause"));
+          // 2.3.3. Reject pending play promises with promises and an "AbortError" DOMException.
+          promises.forEach((deferred) => deferred.reject(error));
+          // 2.4. Set the official playback position to the current playback position.
+          // (The pipeline reports the current playback position when it stops
+          // playing, see #updatePlaying() below.)
+          this.#timeMarchesOn(false, performance.now());
+        },
+        () => promises.forEach((deferred) => deferred.reject(error))
+      );
       this.#updatePlaying();
     }
   }
@@ -617,7 +933,7 @@ export class BabyVideoElement extends HTMLElement {
     // when the direction of playback is forwards, then the user agent must follow these steps:
     if (this.#playbackRate >= 0) {
       // 3. Queue a media element task given the media element and the following steps:
-      queueTask(() => {
+      this.#queueMediaElementTask(() => {
         // 3.1. Fire an event named timeupdate at the media element.
         this.dispatchEvent(new Event("timeupdate"));
         // 3.2. If the media element has ended playback, the direction of playback is forwards,
@@ -641,7 +957,7 @@ export class BabyVideoElement extends HTMLElement {
     // when the direction of playback is backwards, then the user agent must only queue a media element
     // task given the media element to fire an event named timeupdate at the element.
     else {
-      queueTask(() => {
+      this.#queueMediaElementTask(() => {
         this.dispatchEvent(new Event("timeupdate"));
         // Deviation from the spec: also pause, like when reaching the end
         // in the forward direction (but without firing ended). Otherwise the
@@ -684,7 +1000,9 @@ export class BabyVideoElement extends HTMLElement {
     //    named timeupdate at the element.
     if (isNormalPlayback && now - this.#lastTimeUpdate > 15) {
       this.#lastTimeUpdate = now;
-      queueTask(() => this.dispatchEvent(new Event("timeupdate")));
+      this.#queueMediaElementTask(() =>
+        this.dispatchEvent(new Event("timeupdate"))
+      );
     }
   }
 
@@ -713,7 +1031,7 @@ export class BabyVideoElement extends HTMLElement {
       newPosition = 0;
     }
     // 10. Queue a media element task given the media element to fire an event named seeking at the element.
-    queueTask(() => this.dispatchEvent(new Event("seeking")));
+    this.#queueMediaElementTask(() => this.dispatchEvent(new Event("seeking")));
     // 11. Set the current playback position to the new playback position.
     this.#updateCurrentTime(newPosition);
     // 12. Wait until the user agent has established whether or not the media data for the new playback position
@@ -732,9 +1050,11 @@ export class BabyVideoElement extends HTMLElement {
     // 15. Run the time marches on steps.
     this.#timeMarchesOn(false, performance.now());
     // 16. Queue a media element task given the media element to fire an event named timeupdate at the element.
-    queueTask(() => this.dispatchEvent(new Event("timeupdate")));
+    this.#queueMediaElementTask(() =>
+      this.dispatchEvent(new Event("timeupdate"))
+    );
     // 17. Queue a media element task given the media element to fire an event named seeked at the element.
-    queueTask(() => this.dispatchEvent(new Event("seeked")));
+    this.#queueMediaElementTask(() => this.dispatchEvent(new Event("seeked")));
   }
 
   #getGain(): number {
@@ -766,7 +1086,9 @@ export class BabyVideoElement extends HTMLElement {
       (Number.isNaN(oldDuration) && !Number.isNaN(newDuration)) ||
       oldDuration !== newDuration
     ) {
-      queueTask(() => this.dispatchEvent(new Event("durationchange")));
+      this.#queueMediaElementTask(() =>
+        this.dispatchEvent(new Event("durationchange"))
+      );
     }
     // If the duration is changed such that the current playback position ends up being greater than
     // the time of the end of the media resource, then the user agent must also seek to
@@ -792,7 +1114,9 @@ export class BabyVideoElement extends HTMLElement {
       newReadyState === MediaReadyState.HAVE_METADATA
     ) {
       // Queue a media element task given the media element to fire an event named loadedmetadata at the element.
-      queueTask(() => this.dispatchEvent(new Event("loadedmetadata")));
+      this.#queueMediaElementTask(() =>
+        this.dispatchEvent(new Event("loadedmetadata"))
+      );
       return;
     }
     // If the previous ready state was HAVE_METADATA and the new ready state is HAVE_CURRENT_DATA or greater
@@ -804,7 +1128,9 @@ export class BabyVideoElement extends HTMLElement {
       // the user agent must queue a media element task given the media element to fire an event named loadeddata at the element.
       if (!this.#hasFiredLoadedData) {
         this.#hasFiredLoadedData = true;
-        queueTask(() => this.dispatchEvent(new Event("loadeddata")));
+        this.#queueMediaElementTask(() =>
+          this.dispatchEvent(new Event("loadeddata"))
+        );
       }
       // If the new ready state is HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA, then the relevant steps below must then be run also.
     }
@@ -819,8 +1145,12 @@ export class BabyVideoElement extends HTMLElement {
       // the user agent must queue a media element task given the media element to fire an event named timeupdate at the element,
       // and queue a media element task given the media element to fire an event named waiting at the element.
       if (wasPotentiallyPlaying && !this.#hasEndedPlayback()) {
-        queueTask(() => this.dispatchEvent(new Event("timeupdate")));
-        queueTask(() => this.dispatchEvent(new Event("waiting")));
+        this.#queueMediaElementTask(() =>
+          this.dispatchEvent(new Event("timeupdate"))
+        );
+        this.#queueMediaElementTask(() =>
+          this.dispatchEvent(new Event("waiting"))
+        );
       }
       return;
     }
@@ -831,7 +1161,9 @@ export class BabyVideoElement extends HTMLElement {
       newReadyState >= MediaReadyState.HAVE_FUTURE_DATA
     ) {
       // The user agent must queue a media element task given the media element to fire an event named canplay at the element.
-      queueTask(() => this.dispatchEvent(new Event("canplay")));
+      this.#queueMediaElementTask(() =>
+        this.dispatchEvent(new Event("canplay"))
+      );
       // If the element's paused attribute is false, the user agent must notify about playing for the element.
       if (!this.#paused) {
         this.#notifyAboutPlaying();
@@ -841,7 +1173,9 @@ export class BabyVideoElement extends HTMLElement {
     if (newReadyState === MediaReadyState.HAVE_ENOUGH_DATA) {
       // Note: the first step is handled together with HAVE_FUTURE_DATA
       // The user agent must queue a media element task given the media element to fire an event named canplaythrough at the element.
-      queueTask(() => this.dispatchEvent(new Event("canplaythrough")));
+      this.#queueMediaElementTask(() =>
+        this.dispatchEvent(new Event("canplaythrough"))
+      );
     }
   }
 
@@ -855,7 +1189,9 @@ export class BabyVideoElement extends HTMLElement {
     // the user agent must queue a media element task given the media element
     // to fire an event named resize at the media element.
     if (this.#readyState !== MediaReadyState.HAVE_NOTHING) {
-      queueTask(() => this.dispatchEvent(new Event("resize")));
+      this.#queueMediaElementTask(() =>
+        this.dispatchEvent(new Event("resize"))
+      );
     }
   }
 
@@ -868,7 +1204,9 @@ export class BabyVideoElement extends HTMLElement {
     const timeUntilNextProgress = 350 - (now - this.#lastProgress);
     if (timeUntilNextProgress <= 0) {
       this.#lastProgress = now;
-      queueTask(() => this.dispatchEvent(new Event("progress")));
+      this.#queueMediaElementTask(() =>
+        this.dispatchEvent(new Event("progress"))
+      );
     } else {
       this.#nextProgressTimer = setTimeout(
         () => this.#notifyProgress(),
@@ -980,6 +1318,8 @@ export class BabyVideoElement extends HTMLElement {
       element.#onVideoFramePresented(frame);
     onVideoFramesDropped = (element, droppedFrames) =>
       element.#onVideoFramesDropped(droppedFrames);
+    onPipelineError = (element, error, message) =>
+      element.#onPipelineError(error, message);
     createAudioOutput = (element, init) => element.#createAudioOutput(init);
   }
 }
@@ -1040,6 +1380,10 @@ class BabyVideoElementPipelineHost implements MediaPipelineHost {
     if (this.#isCurrent()) onVideoFramesDropped(this.#element, droppedFrames);
   }
 
+  onError(error: MediaPipelineError, message: string): void {
+    if (this.#isCurrent()) onPipelineError(this.#element, error, message);
+  }
+
   createAudioOutput(init: MediaPipelineAudioOutputInit): void {
     if (this.#isCurrent()) {
       createAudioOutput(this.#element, init);
@@ -1047,6 +1391,24 @@ class BabyVideoElementPipelineHost implements MediaPipelineHost {
       init.port.close();
     }
   }
+}
+
+// Like the constants of a WebIDL interface, these are also on the prototype.
+for (const name of [
+  "NETWORK_EMPTY",
+  "NETWORK_IDLE",
+  "NETWORK_LOADING",
+  "NETWORK_NO_SOURCE",
+  "HAVE_NOTHING",
+  "HAVE_METADATA",
+  "HAVE_CURRENT_DATA",
+  "HAVE_FUTURE_DATA",
+  "HAVE_ENOUGH_DATA"
+] as const) {
+  Object.defineProperty(BabyVideoElement.prototype, name, {
+    value: BabyVideoElement[name],
+    enumerable: true
+  });
 }
 
 customElements.define("baby-video", BabyVideoElement);

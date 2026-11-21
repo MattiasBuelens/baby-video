@@ -48,6 +48,10 @@ export interface MediaPipelineHost {
   onSeekComplete(): void;
   // The intrinsic size of the video changed.
   onResize(width: number, height: number): void;
+  // A fatal error occurred, and the pipeline stopped.
+  // The media element picks the steps to run for it, based on its readyState.
+  // https://html.spec.whatwg.org/multipage/media.html#media-data-processing-steps-list
+  onError(error: MediaPipelineError, message: string): void;
   // A video frame was drawn to the canvas.
   onVideoFramePresented(frame: PresentedVideoFrame): void;
   // Video frames were dropped, without presenting a new frame.
@@ -82,6 +86,13 @@ export interface PresentedVideoFrame {
   // The total number of dropped frames so far.
   readonly droppedFrames: number;
 }
+
+// The kinds of fatal errors that a pipeline reports.
+// - "network": the MediaSource ended with a "network" error.
+// - "decode": the MediaSource ended with a "decode" error (e.g. an append
+//   error), or a decoder failed.
+// - "unsupported": the MediaSource could not be attached.
+export type MediaPipelineError = "network" | "decode" | "unsupported";
 
 export interface MediaPipelineAudioOutputInit {
   readonly sampleRate: number;
@@ -177,7 +188,12 @@ export class MediaPipeline implements MediaSourceAttachment {
   // i.e. whether the playback position should advance.
   #playing: boolean = false;
   #seeking: boolean = false;
+  // Whether the pipeline stopped decoding and rendering for good,
+  // because it was detached or because of a fatal error.
+  #stopped: boolean = false;
   #detached: boolean = false;
+  // Whether we attached to the MediaSource, and must detach from it.
+  #attached: boolean = false;
 
   #advanceLoop: number = 0;
   // Whether we're inside #advanceCurrentTime().
@@ -251,15 +267,23 @@ export class MediaPipeline implements MediaSourceAttachment {
 
     this.#videoDecoder = new VideoDecoder({
       output: (frame) => this.#onVideoFrame(frame),
-      error: (error) => console.error("WTF", error)
+      // https://html.spec.whatwg.org/multipage/media.html#fatal-decode-error
+      error: (error) => this.#fail("decode", `VideoDecoder: ${error.message}`)
     });
 
     this.#audioDecoder = new AudioDecoder({
       output: (data) => this.#onAudioData(data),
-      error: (error) => console.error("WTF", error)
+      error: (error) => this.#fail("decode", `AudioDecoder: ${error.message}`)
     });
 
-    attachToMediaElement(mediaSource, this);
+    // https://w3c.github.io/media-source/#mediasource-attach
+    this.#attached = attachToMediaElement(mediaSource, this);
+    if (!this.#attached) {
+      this.#fail(
+        "unsupported",
+        "The MediaSource is already attached to a media element"
+      );
+    }
   }
 
   // region MediaSourceAttachment
@@ -292,7 +316,7 @@ export class MediaPipeline implements MediaSourceAttachment {
     const previousReadyState = this.#readyState;
     this.#readyState = newReadyState;
     this.#host.onReadyStateChange(newReadyState);
-    if (this.#detached || previousReadyState === newReadyState) {
+    if (this.#stopped || previousReadyState === newReadyState) {
       return;
     }
     if (this.#nextReadyStateChangePromise) {
@@ -333,6 +357,13 @@ export class MediaPipeline implements MediaSourceAttachment {
     this.#host.onEndOfStream();
   }
 
+  notifyEndOfStreamError(error: "network" | "decode"): void {
+    // https://w3c.github.io/media-source/#end-of-stream-algorithm
+    // The media element runs the steps for the error (see MediaPipelineHost.onError).
+    // All of them stop fetching and decoding.
+    this.#fail(error, `The MediaSource ended with a ${error} error`);
+  }
+
   // endregion
 
   // region Commands from the media element
@@ -346,7 +377,7 @@ export class MediaPipeline implements MediaSourceAttachment {
   // media element is potentially playing and not seeking.
   // https://html.spec.whatwg.org/multipage/media.html#potentially-playing
   setPlaying(playing: boolean): void {
-    if (this.#detached || playing === this.#playing) {
+    if (this.#stopped || playing === this.#playing) {
       return;
     }
     if (playing) {
@@ -379,7 +410,7 @@ export class MediaPipeline implements MediaSourceAttachment {
 
   // https://html.spec.whatwg.org/multipage/media.html#dom-media-playbackrate
   setPlaybackRate(playbackRate: number): void {
-    if (this.#detached || playbackRate === this.#playbackRate) {
+    if (this.#stopped || playbackRate === this.#playbackRate) {
       return;
     }
     const currentTime = this.#getCurrentPlaybackPosition(performance.now());
@@ -400,7 +431,7 @@ export class MediaPipeline implements MediaSourceAttachment {
   // Calls MediaPipelineHost.onSeekComplete() when done, so the element can
   // run the remaining steps.
   seek(newPosition: number): void {
-    if (this.#detached) {
+    if (this.#stopped) {
       return;
     }
     // Abort any previous seek.
@@ -419,7 +450,7 @@ export class MediaPipeline implements MediaSourceAttachment {
   // The audio output sent a new snapshot of its clock.
   updateAudioClock(snapshot: AudioClockSnapshot): void {
     const sink = this.#audioSink;
-    if (this.#detached || sink === undefined) {
+    if (this.#stopped || sink === undefined) {
       return;
     }
     const wasRunning = sink.clockState === "running";
@@ -435,6 +466,31 @@ export class MediaPipeline implements MediaSourceAttachment {
       return;
     }
     this.#detached = true;
+    this.#stop();
+    if (this.#attached) {
+      this.#attached = false;
+      detachFromMediaElement(this.#mediaSource);
+    }
+  }
+
+  // endregion
+
+  // Stops for good after a fatal error, and tells the media element.
+  // We stay attached to the MediaSource until the element detaches us.
+  #fail(error: MediaPipelineError, message: string): void {
+    if (this.#stopped) {
+      return;
+    }
+    this.#stop();
+    this.#host.onError(error, message);
+  }
+
+  // Stops decoding and rendering, and releases all resources.
+  #stop(): void {
+    if (this.#stopped) {
+      return;
+    }
+    this.#stopped = true;
     this.#playing = false;
     this.#seeking = false;
     this.#seekAbortController.abort();
@@ -446,12 +502,14 @@ export class MediaPipeline implements MediaSourceAttachment {
     this.#resetAudioDecoder(0);
     this.#audioSink?.close();
     this.#audioSink = undefined;
-    this.#videoDecoder.close();
-    this.#audioDecoder.close();
-    detachFromMediaElement(this.#mediaSource);
+    // A decoder closes itself after an error.
+    if (this.#videoDecoder.state !== "closed") {
+      this.#videoDecoder.close();
+    }
+    if (this.#audioDecoder.state !== "closed") {
+      this.#audioDecoder.close();
+    }
   }
-
-  // endregion
 
   #getCurrentPlaybackPosition(now: number): number {
     // https://html.spec.whatwg.org/multipage/media.html#playing-the-media-resource
@@ -642,7 +700,12 @@ export class MediaPipeline implements MediaSourceAttachment {
 
   #decodeVideoFrames(): void {
     const mediaSource = this.#mediaSource;
-    if (!mediaSource) {
+    if (!mediaSource || this.#stopped) {
+      return;
+    }
+    // A decoder closes itself right away after an error,
+    // but it only tells us (and we only stop) a bit later.
+    if (this.#videoDecoder.state === "closed") {
       return;
     }
     const videoTrackBuffer = getActiveVideoTrackBuffer(mediaSource);
@@ -811,6 +874,11 @@ export class MediaPipeline implements MediaSourceAttachment {
     const bitmap = await createImageBitmap(
       frame as unknown as CanvasImageSource
     );
+    if (this.#stopped) {
+      bitmap.close();
+      frame.close();
+      return;
+    }
     const newFrame = new VideoFrame(bitmap, {
       timestamp: decodingFrame.timestamp,
       duration: decodingFrame.duration!
@@ -947,12 +1015,18 @@ export class MediaPipeline implements MediaSourceAttachment {
     this.#decodingVideoFrames.length = 0;
     this.#decodedVideoFrames.length = 0;
     this.#needKeyFrame = true;
-    this.#videoDecoder.reset();
+    if (this.#videoDecoder.state !== "closed") {
+      this.#videoDecoder.reset();
+    }
   }
 
   #decodeAudio(): void {
     const mediaSource = this.#mediaSource;
-    if (!mediaSource) {
+    if (!mediaSource || this.#stopped) {
+      return;
+    }
+    // See #decodeVideoFrames().
+    if (this.#audioDecoder.state === "closed") {
       return;
     }
     const audioTrackBuffer = getActiveAudioTrackBuffer(mediaSource);
@@ -1264,7 +1338,9 @@ export class MediaPipeline implements MediaSourceAttachment {
     this.#audioDecoderTimestamp = 0;
     this.#furthestDecodedAudioFrame = undefined;
     this.#decodingAudioFrames.length = 0;
-    this.#audioDecoder.reset();
+    if (this.#audioDecoder.state !== "closed") {
+      this.#audioDecoder.reset();
+    }
     for (const batch of this.#reverseAudioBatches) {
       for (const decodedFrame of batch.decoded) {
         decodedFrame.frame.close();
