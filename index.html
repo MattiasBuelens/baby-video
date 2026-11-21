@@ -85,6 +85,45 @@
         </p>
       </section>
 
+      <section class="panel frame-stats" aria-labelledby="frames-heading">
+        <h2 id="frames-heading">Frames</h2>
+        <p class="hint">
+          From <code>requestVideoFrameCallback()</code> and
+          <code>getVideoPlaybackQuality()</code>. Play at 2× or block the main
+          thread to drop some frames.
+        </p>
+        <dl class="frame-stats-list">
+          <div>
+            <dt>Presented</dt>
+            <dd data-stat="presented">0</dd>
+          </div>
+          <div>
+            <dt>Dropped</dt>
+            <dd data-stat="dropped">0</dd>
+          </div>
+          <div>
+            <dt>Total</dt>
+            <dd data-stat="total">0</dd>
+          </div>
+          <div>
+            <dt>Callback rate</dt>
+            <dd data-stat="rate">–</dd>
+          </div>
+          <div>
+            <dt>Media time</dt>
+            <dd data-stat="media-time">–</dd>
+          </div>
+          <div>
+            <dt>Frame size</dt>
+            <dd data-stat="size">–</dd>
+          </div>
+          <div>
+            <dt>Processing</dt>
+            <dd data-stat="processing">–</dd>
+          </div>
+        </dl>
+      </section>
+
       <section class="panel buffer-view" aria-labelledby="buffer-heading">
         <h2 id="buffer-heading">Buffer</h2>
         <p class="hint">

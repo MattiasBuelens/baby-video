@@ -118,6 +118,12 @@ export class MediaPipelineProxy {
       case "resize":
         host.onResize(message.width, message.height);
         break;
+      case "video-frame-presented":
+        host.onVideoFramePresented(message.frame);
+        break;
+      case "video-frames-dropped":
+        host.onVideoFramesDropped(message.droppedFrames);
+        break;
       case "create-audio-output":
         host.createAudioOutput({
           sampleRate: message.sampleRate,
