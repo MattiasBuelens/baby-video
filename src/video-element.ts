@@ -37,6 +37,18 @@ import type {
 const template = document.createElement("template");
 template.innerHTML = `<style>${stylesheet}</style>`;
 
+// Internal accessors for BabyVideoElementAttachment.
+let updateDuration: (
+  videoElement: BabyVideoElement,
+  newDuration: number
+) => void;
+let updateReadyState: (
+  videoElement: BabyVideoElement,
+  newReadyState: MediaReadyState
+) => void;
+let notifyProgress: (videoElement: BabyVideoElement) => void;
+let notifyEndOfStream: (videoElement: BabyVideoElement) => void;
+
 // Low and high watermark for decode queue
 // If the queue drops below the LWM, we try to fill it with up to HWM new frames
 const decodeQueueLwm = 20;
@@ -147,25 +159,9 @@ export class BabyVideoElement extends HTMLElement {
   #pendingAudioFrames: DecodedAudioFrame[] = [];
 
   // The view of this element that an attached BabyMediaSource gets to see.
-  readonly #attachment: MediaSourceAttachment = (() => {
-    const element = this;
-    return {
-      get readyState() {
-        return element.#readyState;
-      },
-      get currentTime() {
-        return element.#currentTime;
-      },
-      get playbackRate() {
-        return element.#playbackRate;
-      },
-      updateDuration: (newDuration) => element.#updateDuration(newDuration),
-      updateReadyState: (newReadyState) =>
-        element.#updateReadyState(newReadyState),
-      notifyProgress: () => element.#notifyProgress(),
-      notifyEndOfStream: () => element.#notifyEndOfStream()
-    };
-  })();
+  readonly #attachment: MediaSourceAttachment = new BabyVideoElementAttachment(
+    this
+  );
 
   constructor() {
     super();
@@ -1533,6 +1529,52 @@ export class BabyVideoElement extends HTMLElement {
 
   #notifyEndOfStream(): void {
     this.#isEndOfStream = true;
+  }
+
+  static {
+    updateDuration = (videoElement, newDuration) =>
+      videoElement.#updateDuration(newDuration);
+    updateReadyState = (videoElement, newReadyState) =>
+      videoElement.#updateReadyState(newReadyState);
+    notifyProgress = (videoElement) => videoElement.#notifyProgress();
+    notifyEndOfStream = (videoElement) => videoElement.#notifyEndOfStream();
+  }
+}
+
+// The MediaSourceAttachment of a BabyVideoElement.
+class BabyVideoElementAttachment implements MediaSourceAttachment {
+  readonly #element: BabyVideoElement;
+
+  constructor(element: BabyVideoElement) {
+    this.#element = element;
+  }
+
+  get readyState(): MediaReadyState {
+    return this.#element.readyState;
+  }
+
+  get currentTime(): number {
+    return this.#element.currentTime;
+  }
+
+  get playbackRate(): number {
+    return this.#element.playbackRate;
+  }
+
+  updateDuration(newDuration: number): void {
+    updateDuration(this.#element, newDuration);
+  }
+
+  updateReadyState(newReadyState: MediaReadyState): void {
+    updateReadyState(this.#element, newReadyState);
+  }
+
+  notifyProgress(): void {
+    notifyProgress(this.#element);
+  }
+
+  notifyEndOfStream(): void {
+    notifyEndOfStream(this.#element);
   }
 }
 
