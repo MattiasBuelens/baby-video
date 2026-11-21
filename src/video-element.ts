@@ -244,8 +244,10 @@ export class BabyVideoElement extends HTMLElement {
     return this.#srcObject;
   }
 
+  // https://html.spec.whatwg.org/multipage/media.html#dom-media-srcobject
   // Accepts a BabyMediaSource on the main thread, or a BabyMediaSourceHandle
   // of a BabyMediaSource in a dedicated worker.
+  // https://w3c.github.io/media-source/#mediasource-attach
   set srcObject(
     srcObject: BabyMediaSource | BabyMediaSourceHandle | undefined | null
   ) {
