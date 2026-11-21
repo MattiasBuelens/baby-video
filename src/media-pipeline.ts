@@ -210,7 +210,9 @@ export class MediaPipeline implements MediaSourceAttachment {
   #decodingVideoFrames: EncodedVideoChunk[] = [];
   #decodedVideoFrames: VideoFrame[] = [];
   #nextDecodedVideoFramePromise: Deferred<void> | undefined = undefined;
-  #lastRenderedFrame: number | undefined = undefined;
+  // The frame on the canvas, since the last seek. Rendering takes it out of
+  // the decoded frames, but it still counts for seek completion.
+  #lastRenderedFrame: RenderedVideoFrame | undefined = undefined;
   #nextRenderFrame: number = 0;
   #needKeyFrame: boolean = true;
   // Frames that are only decoded because a later frame depends on them,
@@ -634,6 +636,20 @@ export class MediaPipeline implements MediaSourceAttachment {
   }
 
   #hasDecodedVideoFrameAtTime(timeInMicros: number): boolean {
+    // The frame at the seek target may have been decoded *and* rendered
+    // before we got to check, e.g. when the video for the new position
+    // arrives before the audio: it's shown as soon as it's decoded, but
+    // the seek only completes once the ready state goes up.
+    if (
+      this.#lastRenderedFrame !== undefined &&
+      isFrameAtTime(
+        this.#lastRenderedFrame,
+        this.#frameDirectionAt(timeInMicros),
+        timeInMicros
+      )
+    ) {
+      return true;
+    }
     return this.#hasDecodedFrameAtTime(this.#decodedVideoFrames, timeInMicros);
   }
 
@@ -959,7 +975,7 @@ export class MediaPipeline implements MediaSourceAttachment {
       return;
     }
     const frame = this.#decodedVideoFrames[currentFrameIndex];
-    if (this.#lastRenderedFrame !== frame.timestamp) {
+    if (this.#lastRenderedFrame?.timestamp !== frame.timestamp) {
       if (DEBUG) {
         console.log(`render video frame timestamp=${frame.timestamp}`);
       }
@@ -972,7 +988,10 @@ export class MediaPipeline implements MediaSourceAttachment {
         frame.displayHeight
       );
       arrayRemoveAt(this.#decodedVideoFrames, currentFrameIndex);
-      this.#lastRenderedFrame = frame.timestamp;
+      this.#lastRenderedFrame = new RenderedVideoFrame(
+        frame.timestamp,
+        frame.duration
+      );
       this.#presentVideoFrame(frame, now);
       frame.close();
     } else {
@@ -1453,4 +1472,15 @@ function copyAudioDataToSamples(
     }
   }
   return samples;
+}
+
+// A video frame that we drew to the canvas (and then closed).
+class RenderedVideoFrame {
+  readonly timestamp: number;
+  readonly duration: number | null;
+
+  constructor(timestamp: number, duration: number | null) {
+    this.timestamp = timestamp;
+    this.duration = duration;
+  }
 }

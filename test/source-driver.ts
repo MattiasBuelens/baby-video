@@ -11,7 +11,8 @@ export type SourceCommand =
   | { type: "append-media"; corruptVideoConfig?: boolean }
   | { type: "fail-video-decoder" }
   | { type: "append-wrong-init-segment" }
-  | { type: "append-media-again" }
+  | { type: "append-media-again"; track?: "video" | "audio" }
+  | { type: "remove"; track: "video" | "audio"; start: number; end: number }
   | { type: "end-of-stream"; error?: "network" | "decode" };
 
 // Decoders are quite forgiving about corrupted data, so make them fail on
@@ -58,7 +59,9 @@ export class SourceDriver {
       case "append-wrong-init-segment":
         return this.#appendWrongInitSegment();
       case "append-media-again":
-        return this.#appendMediaAgain();
+        return this.#appendMediaAgain(command.track);
+      case "remove":
+        return this.#remove(command.track, command.start, command.end);
       case "end-of-stream":
         this.#mediaSource.endOfStream(command.error);
         return;
@@ -92,15 +95,33 @@ export class SourceDriver {
     await append(videoSourceBuffer, video.buffer);
   }
 
-  // Appends the same media again to the existing SourceBuffers.
+  // Appends the same media again to the existing SourceBuffers,
+  // or only to the one for the given track.
   // (This reopens an ended MediaSource.)
-  async #appendMediaAgain(): Promise<void> {
+  async #appendMediaAgain(track?: "video" | "audio"): Promise<void> {
     const [videoSourceBuffer, audioSourceBuffer] =
       this.#mediaSource.sourceBuffers;
-    const video = await (await fetch(videoUrl)).arrayBuffer();
-    const audio = await (await fetch(audioUrl)).arrayBuffer();
-    await append(audioSourceBuffer, audio);
-    await append(videoSourceBuffer, video);
+    if (track !== "video") {
+      const audio = await (await fetch(audioUrl)).arrayBuffer();
+      await append(audioSourceBuffer, audio);
+    }
+    if (track !== "audio") {
+      const video = await (await fetch(videoUrl)).arrayBuffer();
+      await append(videoSourceBuffer, video);
+    }
+  }
+
+  async #remove(
+    track: "video" | "audio",
+    start: number,
+    end: number
+  ): Promise<void> {
+    const [videoSourceBuffer, audioSourceBuffer] =
+      this.#mediaSource.sourceBuffers;
+    const sourceBuffer =
+      track === "video" ? videoSourceBuffer : audioSourceBuffer;
+    sourceBuffer.remove(start, end);
+    await waitForEvent(sourceBuffer, "updateend");
   }
 
   async #appendWrongInitSegment(): Promise<void> {
