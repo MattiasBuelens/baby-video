@@ -208,10 +208,18 @@ export class MediaPipeline implements MediaSourceAttachment {
   }
 
   updateDuration(newDuration: number): void {
+    // https://w3c.github.io/media-source/#duration-change-algorithm
+    // 6.1. Update the media element's duration to new duration.
+    // 6.2. Run the HTMLMediaElement duration change algorithm.
+    // (https://html.spec.whatwg.org/multipage/media.html#dom-media-duration, run by the element.)
     this.#host.onDurationChange(newDuration);
   }
 
   updateReadyState(newReadyState: MediaReadyState): void {
+    // https://html.spec.whatwg.org/multipage/media.html#ready-states
+    // The element fires the events for this transition (see #updateReadyState
+    // in BabyVideoElement). The pipeline only has to start decoding or
+    // rendering, and wake up a pending seek.
     const previousReadyState = this.#readyState;
     this.#readyState = newReadyState;
     this.#host.onReadyStateChange(newReadyState);
@@ -241,10 +249,13 @@ export class MediaPipeline implements MediaSourceAttachment {
   }
 
   notifyProgress(): void {
+    // https://html.spec.whatwg.org/multipage/media.html#concept-media-load-resource (the progress event, fired by the element)
     this.#host.onProgress();
   }
 
   notifyEndOfStream(): void {
+    // https://w3c.github.io/media-source/#dfn-end-of-stream
+    // 3.2. Notify the media element that it now has all of the media data.
     this.#host.onEndOfStream();
   }
 
@@ -253,10 +264,13 @@ export class MediaPipeline implements MediaSourceAttachment {
   // region Commands from the media element
 
   get buffered(): TimeRanges {
+    // https://w3c.github.io/media-source/#htmlmediaelement-extensions-buffered
     return getBuffered(this.#mediaSource);
   }
 
-  // Starts or stops advancing the playback position.
+  // Starts or stops advancing the playback position, i.e. whether the
+  // media element is potentially playing and not seeking.
+  // https://html.spec.whatwg.org/multipage/media.html#potentially-playing
   setPlaying(playing: boolean): void {
     if (this.#detached || playing === this.#playing) {
       return;
@@ -271,8 +285,12 @@ export class MediaPipeline implements MediaSourceAttachment {
         );
       }
     } else {
-      // Settle on the current playback position. (If we stop while advancing,
-      // then the advance loop is already reporting the current position.)
+      // Settle on the current playback position, so the element can set its
+      // official playback position to it.
+      // https://html.spec.whatwg.org/multipage/media.html#official-playback-position
+      // https://html.spec.whatwg.org/multipage/media.html#internal-pause-steps (step 2.4)
+      // (If we stop while advancing, then the advance loop is already
+      // reporting the current position.)
       const currentTime = this.#advancing
         ? this.#currentTime
         : this.#getCurrentPlaybackPosition(performance.now());
@@ -287,6 +305,7 @@ export class MediaPipeline implements MediaSourceAttachment {
     }
   }
 
+  // https://html.spec.whatwg.org/multipage/media.html#dom-media-playbackrate
   setPlaybackRate(playbackRate: number): void {
     if (this.#detached || playbackRate === this.#playbackRate) {
       return;
@@ -302,9 +321,12 @@ export class MediaPipeline implements MediaSourceAttachment {
     this.#host.onTimeUpdate(currentTime, false);
   }
 
-  // Sets the current playback position to the new playback position,
-  // and waits until enough data is decoded to play back that position.
-  // Calls MediaPipelineHost.onSeekComplete() when done.
+  // https://html.spec.whatwg.org/multipage/media.html#dom-media-seek
+  // 11. Set the current playback position to the new playback position.
+  // 12. Wait until the user agent has established whether or not the media data for the new playback position
+  //     is available, and, if it is, until it has decoded enough data to play back that position.
+  // Calls MediaPipelineHost.onSeekComplete() when done, so the element can
+  // run the remaining steps.
   seek(newPosition: number): void {
     if (this.#detached) {
       return;
@@ -352,6 +374,7 @@ export class MediaPipeline implements MediaSourceAttachment {
   // endregion
 
   #getCurrentPlaybackPosition(now: number): number {
+    // https://html.spec.whatwg.org/multipage/media.html#playing-the-media-resource
     // When a media element is potentially playing and its Document is a fully active Document,
     // its current playback position must increase monotonically at the element's playbackRate units
     // of media time per unit time of the media timeline's clock.
@@ -395,12 +418,17 @@ export class MediaPipeline implements MediaSourceAttachment {
   }
 
   #setCurrentTime(currentTime: number): void {
+    // Whenever the current playback position changes, the MediaSource checks
+    // whether it still has enough data: https://w3c.github.io/media-source/#buffer-monitoring
     this.#currentTime = currentTime;
     this.#decodeVideoFrames();
     this.#decodeAudio();
     checkBuffer(this.#mediaSource);
   }
 
+  // Advances the current playback position during normal playback.
+  // https://html.spec.whatwg.org/multipage/media.html#playing-the-media-resource
+  // The element then runs the "time marches on" steps (see #timeMarchesOn).
   #advanceCurrentTime(now: number): void {
     this.#advancing = true;
     try {
@@ -1119,6 +1147,8 @@ export class MediaPipeline implements MediaSourceAttachment {
   }
 
   #updateSize(width: number, height: number): void {
+    // https://html.spec.whatwg.org/multipage/media.html#concept-video-intrinsic-width
+    // (The element fires the resize event.)
     if (this.#canvas.width !== width || this.#canvas.height !== height) {
       this.#canvas.width = width;
       this.#canvas.height = height;

@@ -369,11 +369,16 @@ export class BabyVideoElement extends HTMLElement {
     }
   }
 
-  // Tells the pipeline whether the playback position should advance.
+  // Tells the pipeline whether the playback position should advance:
+  // when potentially playing, and not seeking.
+  // https://html.spec.whatwg.org/multipage/media.html#potentially-playing
   #updatePlaying(): void {
     this.#pipeline?.setPlaying(this.#isPotentiallyPlaying() && !this.#seeking);
   }
 
+  // The pipeline moved the current playback position.
+  // https://html.spec.whatwg.org/multipage/media.html#playing-the-media-resource
+  // https://html.spec.whatwg.org/multipage/media.html#time-marches-on
   #onTimeUpdate(currentTime: number, isNormalPlayback: boolean): void {
     this.#updateCurrentTime(currentTime);
     // Ending playback stops the playback position from advancing.
@@ -381,6 +386,7 @@ export class BabyVideoElement extends HTMLElement {
     this.#timeMarchesOn(isNormalPlayback, performance.now());
   }
 
+  // https://html.spec.whatwg.org/multipage/media.html#official-playback-position
   #updateCurrentTime(currentTime: number) {
     this.#currentTime = currentTime;
     this.#updatePlayed();
