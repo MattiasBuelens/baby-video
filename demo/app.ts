@@ -13,6 +13,8 @@ import { setupEventLog } from "./event-log";
 import { setupFrameStats } from "./frame-stats";
 
 const video = document.querySelector<BabyVideoElement>("baby-video")!;
+// Set from here (rather than in the HTML) so Vite bundles the image.
+video.poster = new URL("./poster.jpg", import.meta.url).href;
 setupEventLog(video, document.querySelector(".event-log")!);
 setupFrameStats(video, document.querySelector(".frame-stats")!);
 setupPlaybackButtons(video);
