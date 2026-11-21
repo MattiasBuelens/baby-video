@@ -3,7 +3,12 @@ import { BabyMediaSource } from "./media-source";
 import { Deferred, queueTask } from "./util";
 import { TimeRange, TimeRanges } from "./time-ranges";
 import { MediaReadyState } from "./media-source-attachment";
-import { MediaPipeline, type MediaPipelineHost } from "./media-pipeline";
+import {
+  MediaPipeline,
+  type MediaPipelineAudioOutputInit,
+  type MediaPipelineHost
+} from "./media-pipeline";
+import { AudioOutput } from "./audio-output";
 
 const template = document.createElement("template");
 template.innerHTML = `<style>${stylesheet}</style>`;
@@ -31,6 +36,11 @@ let updateSize: (
   height: number
 ) => void;
 
+let createAudioOutput: (
+  element: BabyVideoElement,
+  init: MediaPipelineAudioOutputInit
+) => void;
+
 // A partial re-implementation of the HTML <video> element.
 //
 // This class implements the HTML media element state machine: its attributes,
@@ -38,7 +48,7 @@ let updateSize: (
 // rendering and the playback clock) lives in the MediaPipeline, which reports
 // back through MediaPipelineHost.
 export class BabyVideoElement extends HTMLElement {
-  readonly #canvas: HTMLCanvasElement;
+  #canvas: HTMLCanvasElement;
 
   #currentTime: number = 0;
   #duration: number = NaN;
@@ -64,6 +74,8 @@ export class BabyVideoElement extends HTMLElement {
 
   #pipeline: MediaPipeline | undefined;
   #pipelineHost: MediaPipelineHost | undefined;
+  #audioOutput: AudioOutput | undefined;
+  #audioOutputPlaying: boolean = false;
 
   constructor() {
     super();
@@ -71,10 +83,10 @@ export class BabyVideoElement extends HTMLElement {
     const shadow = this.attachShadow({ mode: "open" });
     shadow.appendChild(template.content.cloneNode(true));
 
-    this.#canvas = document.createElement("canvas");
     // The default object size is a width of 300 CSS pixels and a height of 150 CSS pixels.
-    this.#canvas.width = this.#videoWidth = 300;
-    this.#canvas.height = this.#videoHeight = 150;
+    this.#videoWidth = 300;
+    this.#videoHeight = 150;
+    this.#canvas = this.#createCanvas();
     shadow.appendChild(this.#canvas);
 
     const canvasContext = this.#canvas.getContext("2d")!;
@@ -89,6 +101,24 @@ export class BabyVideoElement extends HTMLElement {
     ) {
       throw new Error(`<baby-video>: This browser does not support WebCodecs.`);
     }
+  }
+
+  #createCanvas(): HTMLCanvasElement {
+    const canvas = document.createElement("canvas");
+    canvas.width = 300;
+    canvas.height = 150;
+    return canvas;
+  }
+
+  // Gives the media pipeline a fresh canvas to render to.
+  // The pipeline renders to an OffscreenCanvas, so it can live in a worker.
+  // Once a canvas has transferred control to an OffscreenCanvas, it cannot
+  // be reused for another pipeline.
+  #transferCanvas(): OffscreenCanvas {
+    const canvas = this.#createCanvas();
+    this.#canvas.replaceWith(canvas);
+    this.#canvas = canvas;
+    return canvas.transferControlToOffscreen();
   }
 
   connectedCallback(): void {
@@ -196,6 +226,9 @@ export class BabyVideoElement extends HTMLElement {
     this.#pipeline?.detach();
     this.#pipeline = undefined;
     this.#pipelineHost = undefined;
+    this.#audioOutput?.close();
+    this.#audioOutput = undefined;
+    this.#audioOutputPlaying = false;
     this.#srcObject = srcObject;
     this.#currentTime = 0;
     this.#duration = NaN;
@@ -216,10 +249,9 @@ export class BabyVideoElement extends HTMLElement {
       this.#pipeline = new MediaPipeline(
         srcObject,
         this.#pipelineHost,
-        this.#canvas,
+        this.#transferCanvas(),
         {
-          playbackRate: this.#playbackRate,
-          gain: this.#getGain()
+          playbackRate: this.#playbackRate
         }
       );
     }
@@ -373,7 +405,48 @@ export class BabyVideoElement extends HTMLElement {
   // when potentially playing, and not seeking.
   // https://html.spec.whatwg.org/multipage/media.html#potentially-playing
   #updatePlaying(): void {
-    this.#pipeline?.setPlaying(this.#isPotentiallyPlaying() && !this.#seeking);
+    const playing = this.#isPotentiallyPlaying() && !this.#seeking;
+    this.#pipeline?.setPlaying(playing);
+    // The audio context lives on the main thread, so we resume and suspend it
+    // here. (Resuming may need a user gesture, see the autoplay policy.)
+    if (
+      this.#audioOutput !== undefined &&
+      playing !== this.#audioOutputPlaying
+    ) {
+      this.#audioOutputPlaying = playing;
+      if (playing) {
+        this.#audioOutput.resume();
+      } else {
+        this.#audioOutput.suspend();
+      }
+    }
+  }
+
+  #createAudioOutput({
+    sampleRate,
+    numberOfChannels,
+    port
+  }: MediaPipelineAudioOutputInit): void {
+    this.#audioOutput?.close();
+    // The audio context must run at the same sample rate as the decoded audio,
+    // which is not necessarily the sample rate from the decoder config:
+    // with HE-AAC, the decoder outputs twice the declared sample rate.
+    const pipeline = this.#pipeline!;
+    const audioOutput = new AudioOutput({
+      sampleRate,
+      numberOfChannels,
+      port,
+      gain: this.#getGain(),
+      onClock: (snapshot) => {
+        if (this.#audioOutput === audioOutput) {
+          pipeline.updateAudioClock(snapshot);
+        }
+      }
+    });
+    this.#audioOutput = audioOutput;
+    // Start or stop the new audio output.
+    this.#audioOutputPlaying = !this.#audioOutputPlaying;
+    this.#updatePlaying();
   }
 
   // The pipeline moved the current playback position.
@@ -528,7 +601,7 @@ export class BabyVideoElement extends HTMLElement {
   }
 
   #updateVolume(): void {
-    this.#pipeline?.setGain(this.#getGain());
+    this.#audioOutput?.setGain(this.#getGain());
   }
 
   #isPotentiallyPlaying(): boolean {
@@ -678,6 +751,7 @@ export class BabyVideoElement extends HTMLElement {
       element.#onTimeUpdate(currentTime, isNormalPlayback);
     onSeekComplete = (element) => element.#onSeekComplete();
     updateSize = (element, width, height) => element.#updateSize(width, height);
+    createAudioOutput = (element, init) => element.#createAudioOutput(init);
   }
 }
 
@@ -723,6 +797,14 @@ class BabyVideoElementPipelineHost implements MediaPipelineHost {
 
   onResize(width: number, height: number): void {
     if (this.#isCurrent()) updateSize(this.#element, width, height);
+  }
+
+  createAudioOutput(init: MediaPipelineAudioOutputInit): void {
+    if (this.#isCurrent()) {
+      createAudioOutput(this.#element, init);
+    } else {
+      init.port.close();
+    }
   }
 }
 

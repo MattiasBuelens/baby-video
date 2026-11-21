@@ -21,6 +21,7 @@ import {
   VideoTrackBuffer
 } from "./track-buffer";
 import { BabyAudioSink } from "./audio-sink";
+import type { AudioClockSnapshot } from "./audio-output";
 import type {
   AudioSinkDirection,
   AudioSinkStatusMessage
@@ -45,11 +46,22 @@ export interface MediaPipelineHost {
   onSeekComplete(): void;
   // The intrinsic size of the video changed.
   onResize(width: number, height: number): void;
+  // The pipeline needs an audio output for decoded audio with this format.
+  // The host creates an AudioContext (which only exists on the main thread)
+  // with an audio worklet, and hands `port` to that worklet. The pipeline
+  // talks to the worklet through the other end of that port, and the host
+  // reports the audio clock with MediaPipeline.updateAudioClock().
+  createAudioOutput(init: MediaPipelineAudioOutputInit): void;
+}
+
+export interface MediaPipelineAudioOutputInit {
+  readonly sampleRate: number;
+  readonly numberOfChannels: number;
+  readonly port: MessagePort;
 }
 
 export interface MediaPipelineInit {
   readonly playbackRate: number;
-  readonly gain: number;
 }
 
 // Low and high watermark for decode queue
@@ -69,10 +81,6 @@ const audioBufferHwm = 2;
 // #processAudioDecodeQueue), so a large batch can starve the sink right after
 // a seek. A small batch means more preroll frames to decode, which is cheap.
 const maxReverseAudioBatchFrames = 16;
-
-// Maximum number of decoded audio frames to hold on to
-// while the audio worklet module is still loading.
-const maxPendingAudioFrames = 200;
 
 const DEBUG = false;
 
@@ -115,8 +123,8 @@ interface PushedAudioChunk {
 export class MediaPipeline implements MediaSourceAttachment {
   readonly #mediaSource: BabyMediaSource;
   readonly #host: MediaPipelineHost;
-  readonly #canvas: HTMLCanvasElement;
-  readonly #canvasContext: CanvasRenderingContext2D;
+  readonly #canvas: OffscreenCanvas;
+  readonly #canvasContext: OffscreenCanvasRenderingContext2D;
 
   #currentTime: number = 0;
   #playbackRate: number;
@@ -125,7 +133,6 @@ export class MediaPipeline implements MediaSourceAttachment {
   // i.e. whether the playback position should advance.
   #playing: boolean = false;
   #seeking: boolean = false;
-  #gain: number;
   #detached: boolean = false;
 
   #advanceLoop: number = 0;
@@ -164,21 +171,20 @@ export class MediaPipeline implements MediaSourceAttachment {
   // Audio that was handed to the sink but not consumed by it yet, in push order.
   // Doubles as the record of which audio is available for seek completion.
   #pushedAudioChunks: PushedAudioChunk[] = [];
-  // Audio that was decoded while the audio worklet module was still loading.
-  #pendingAudioFrames: DecodedAudioFrame[] = [];
 
   constructor(
     mediaSource: BabyMediaSource,
     host: MediaPipelineHost,
-    canvas: HTMLCanvasElement,
+    canvas: OffscreenCanvas,
     init: MediaPipelineInit
   ) {
     this.#mediaSource = mediaSource;
     this.#host = host;
     this.#canvas = canvas;
     this.#canvasContext = canvas.getContext("2d")!;
+    this.#canvasContext.fillStyle = "black";
+    this.#canvasContext.fillRect(0, 0, canvas.width, canvas.height);
     this.#playbackRate = init.playbackRate;
-    this.#gain = init.gain;
 
     this.#videoDecoder = new VideoDecoder({
       output: (frame) => this.#onVideoFrame(frame),
@@ -277,7 +283,6 @@ export class MediaPipeline implements MediaSourceAttachment {
     }
     if (playing) {
       this.#playing = true;
-      this.#audioSink?.resume();
       if (this.#advanceLoop === 0) {
         this.#lastAdvanceTime = performance.now();
         this.#advanceLoop = requestAnimationFrame((now) =>
@@ -295,7 +300,6 @@ export class MediaPipeline implements MediaSourceAttachment {
         ? this.#currentTime
         : this.#getCurrentPlaybackPosition(performance.now());
       this.#playing = false;
-      this.#audioSink?.suspend();
       cancelAnimationFrame(this.#advanceLoop);
       this.#advanceLoop = 0;
       if (currentTime !== this.#currentTime) {
@@ -344,9 +348,17 @@ export class MediaPipeline implements MediaSourceAttachment {
     ).catch(() => {});
   }
 
-  setGain(gain: number): void {
-    this.#gain = gain;
-    this.#audioSink?.setGain(gain);
+  // The audio output sent a new snapshot of its clock.
+  updateAudioClock(snapshot: AudioClockSnapshot): void {
+    const sink = this.#audioSink;
+    if (this.#detached || sink === undefined) {
+      return;
+    }
+    const wasRunning = sink.clockState === "running";
+    sink.updateClock(snapshot);
+    if (!wasRunning && snapshot.state === "running") {
+      this.#onAudioContextRunning();
+    }
   }
 
   // Detaches from the MediaSource and releases all resources.
@@ -496,10 +508,7 @@ export class MediaPipeline implements MediaSourceAttachment {
   #hasDecodedAudioFrameAtTime(timeInMicros: number): boolean {
     // Decoded audio is handed to the sink immediately, so we have to look at
     // what we pushed to it rather than at a queue of decoded frames.
-    return (
-      this.#hasDecodedFrameAtTime(this.#pendingAudioFrames, timeInMicros) ||
-      this.#hasDecodedFrameAtTime(this.#pushedAudioChunks, timeInMicros)
-    );
+    return this.#hasDecodedFrameAtTime(this.#pushedAudioChunks, timeInMicros);
   }
 
   // The time to look up the frame at current time with, see isFrameAtTime().
@@ -858,17 +867,13 @@ export class MediaPipeline implements MediaSourceAttachment {
   // The amount of audio we've already decoded or are decoding, in seconds.
   #audioBufferedAhead(): number {
     const pushed = sumWith(this.#pushedAudioChunks, (chunk) => chunk.duration);
-    const pending = sumWith(
-      this.#pendingAudioFrames,
-      (frame) => frame.duration
-    );
     const decoding = sumWith(this.#decodingAudioFrames, (chunk) =>
       this.#prerollAudioFrames.has(chunk) ? 0 : chunk.duration!
     );
     const held = sumWith(this.#reverseAudioBatches, (batch) =>
       sumWith(batch.decoded, (frame) => frame.duration)
     );
-    return (pushed + pending + decoding + held) / 1e6;
+    return (pushed + decoding + held) / 1e6;
   }
 
   #processAudioDecodeQueue(
@@ -1027,20 +1032,21 @@ export class MediaPipeline implements MediaSourceAttachment {
       // The audio context must run at the same sample rate as the decoded audio,
       // which is not necessarily the sample rate from the decoder config:
       // with HE-AAC, the decoder outputs twice the declared sample rate.
+      // We talk to the audio worklet through our own port. Until the host has
+      // loaded the worklet and handed it the other end of the port, all our
+      // messages are queued on that port.
+      const { port1, port2 } = new MessageChannel();
       this.#audioSink = new BabyAudioSink({
-        sampleRate,
+        port: port1,
         numberOfChannels,
-        onStatus: (status) => this.#onAudioSinkStatus(status),
-        onReady: () => this.#flushPendingAudioFrames(),
-        onStateChange: (state) => this.#onAudioContextStateChange(state)
+        onStatus: (status) => this.#onAudioSinkStatus(status)
       });
       this.#audioSink.setPlaybackRate(this.#playbackRate);
-      this.#audioSink.setGain(this.#gain);
-      if (this.#playing && !this.#seeking) {
-        this.#audioSink.resume();
-      } else {
-        this.#audioSink.suspend();
-      }
+      this.#host.createAudioOutput({
+        sampleRate,
+        numberOfChannels,
+        port: port2
+      });
     }
     return this.#audioSink;
   }
@@ -1054,15 +1060,6 @@ export class MediaPipeline implements MediaSourceAttachment {
       frame.sampleRate,
       frame.numberOfChannels
     );
-    if (!sink.isReady) {
-      // The audio worklet module is still loading. Hold on to the frame,
-      // it will be pushed as soon as the sink is ready.
-      if (this.#pendingAudioFrames.length >= maxPendingAudioFrames) {
-        this.#pendingAudioFrames.shift()!.frame.close();
-      }
-      this.#pendingAudioFrames.push(decodedFrame);
-      return;
-    }
     if (DEBUG && frame.numberOfChannels !== sink.numberOfChannels) {
       console.warn(
         `audio frame has ${frame.numberOfChannels} channels, but the audio sink has ${sink.numberOfChannels}`
@@ -1083,15 +1080,6 @@ export class MediaPipeline implements MediaSourceAttachment {
     this.#pushedAudioChunks.push({ timestamp, duration, sequence });
   }
 
-  #flushPendingAudioFrames(): void {
-    const frames = this.#pendingAudioFrames.splice(0);
-    const direction =
-      this.#playbackRate < 0 ? Direction.BACKWARD : Direction.FORWARD;
-    for (const frame of frames) {
-      this.#pushAudioToSink(frame, direction);
-    }
-  }
-
   #onAudioSinkStatus(status: AudioSinkStatusMessage): void {
     // Forget about the audio that the sink has already played.
     while (
@@ -1107,10 +1095,7 @@ export class MediaPipeline implements MediaSourceAttachment {
     this.#decodeAudio();
   }
 
-  #onAudioContextStateChange(state: AudioContextState): void {
-    if (state !== "running") {
-      return;
-    }
+  #onAudioContextRunning(): void {
     // If the queued audio no longer covers current time, then we've been
     // running on the wall clock while the audio context was blocked by the
     // autoplay policy. Start over from current time, so the first audible
@@ -1131,10 +1116,6 @@ export class MediaPipeline implements MediaSourceAttachment {
     this.#furthestDecodedAudioFrame = undefined;
     this.#decodingAudioFrames.length = 0;
     this.#audioDecoder.reset();
-    for (const pendingFrame of this.#pendingAudioFrames) {
-      pendingFrame.frame.close();
-    }
-    this.#pendingAudioFrames.length = 0;
     for (const batch of this.#reverseAudioBatches) {
       for (const decodedFrame of batch.decoded) {
         decodedFrame.frame.close();

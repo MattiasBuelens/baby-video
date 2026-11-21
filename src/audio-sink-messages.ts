@@ -43,11 +43,20 @@ export interface AudioSinkCloseMessage {
   readonly type: "close";
 }
 
+// Sent on the AudioWorkletNode's own port, to hand the worklet a port to the
+// media pipeline. All other messages (both ways) then go through that port,
+// so the pipeline can talk to the worklet directly, even from a worker.
+export interface AudioSinkConnectMessage {
+  readonly type: "connect";
+  readonly port: MessagePort;
+}
+
 export type AudioSinkInboundMessage =
   | AudioSinkPushMessage
   | AudioSinkFlushMessage
   | AudioSinkPlaybackRateMessage
-  | AudioSinkCloseMessage;
+  | AudioSinkCloseMessage
+  | AudioSinkConnectMessage;
 
 export interface AudioSinkStatusMessage {
   readonly type: "status";
