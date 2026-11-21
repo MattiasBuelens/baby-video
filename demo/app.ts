@@ -10,9 +10,11 @@ import {
 import { startBuffering } from "./buffering";
 import type { PlaybackStateMessage, WorkerMessage } from "./worker";
 import { setupEventLog } from "./event-log";
+import { setupFrameStats } from "./frame-stats";
 
 const video = document.querySelector<BabyVideoElement>("baby-video")!;
 setupEventLog(video, document.querySelector(".event-log")!);
+setupFrameStats(video, document.querySelector(".frame-stats")!);
 setupPlaybackButtons(video);
 
 // Run the MediaSource (and with it, the whole media pipeline) in a dedicated

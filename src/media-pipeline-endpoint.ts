@@ -4,7 +4,8 @@ import {
   MediaPipeline,
   type MediaPipelineAudioOutputInit,
   type MediaPipelineCanvas,
-  type MediaPipelineHost
+  type MediaPipelineHost,
+  type PresentedVideoFrame
 } from "./media-pipeline";
 import type { MediaReadyState } from "./media-source-attachment";
 import type { TimeRange } from "./time-ranges";
@@ -150,6 +151,14 @@ export class MediaPipelineEndpoint implements MediaPipelineHost {
 
   onResize(width: number, height: number): void {
     this.#post({ type: "resize", width, height });
+  }
+
+  onVideoFramePresented(frame: PresentedVideoFrame): void {
+    this.#post({ type: "video-frame-presented", frame });
+  }
+
+  onVideoFramesDropped(droppedFrames: number): void {
+    this.#post({ type: "video-frames-dropped", droppedFrames });
   }
 
   createAudioOutput(init: MediaPipelineAudioOutputInit): void {

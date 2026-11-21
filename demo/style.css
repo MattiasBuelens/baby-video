@@ -116,6 +116,7 @@ main {
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
     "player"
+    "frames"
     "buffer"
     "events";
 }
@@ -125,13 +126,18 @@ main {
     grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
     grid-template-areas:
       "player events"
+      "frames events"
       "buffer events";
-    grid-template-rows: auto 1fr;
+    grid-template-rows: auto auto 1fr;
   }
 }
 
 .player {
   grid-area: player;
+}
+
+.frame-stats {
+  grid-area: frames;
 }
 
 .buffer-view {
@@ -253,6 +259,33 @@ button[aria-pressed="true"] {
   color: var(--text-muted);
   font-size: 0.9rem;
   margin: 4px 0 8px;
+}
+
+/* Frame stats */
+
+.frame-stats-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.frame-stats-list > div {
+  background: var(--surface-2);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.frame-stats-list dt {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.frame-stats-list dd {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Buffer view */

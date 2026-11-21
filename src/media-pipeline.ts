@@ -48,12 +48,39 @@ export interface MediaPipelineHost {
   onSeekComplete(): void;
   // The intrinsic size of the video changed.
   onResize(width: number, height: number): void;
+  // A video frame was drawn to the canvas.
+  onVideoFramePresented(frame: PresentedVideoFrame): void;
+  // Video frames were dropped, without presenting a new frame.
+  // `droppedFrames` is the total number of dropped frames so far.
+  onVideoFramesDropped(droppedFrames: number): void;
   // The pipeline needs an audio output for decoded audio with this format.
   // The host creates an AudioContext (which only exists on the main thread)
   // with an audio worklet, and hands `port` to that worklet. The pipeline
   // talks to the worklet through the other end of that port, and the host
   // reports the audio clock with MediaPipeline.updateAudioClock().
   createAudioOutput(init: MediaPipelineAudioOutputInit): void;
+}
+
+// A video frame that the pipeline drew to the canvas, for the media element's
+// video frame request callbacks and its playback quality.
+// https://wicg.github.io/video-rvfc/#video-frame-callback-metadata
+// https://w3c.github.io/media-playback-quality/#concepts
+export interface PresentedVideoFrame {
+  // These two are high resolution times relative to the Unix epoch rather than
+  // to performance.timeOrigin, since the pipeline may live in a worker,
+  // which has a different time origin than the element's window.
+  readonly presentationTime: number;
+  readonly expectedDisplayTime: number;
+  // The size of the frame in media pixels, i.e. without the pixel aspect ratio.
+  readonly width: number;
+  readonly height: number;
+  // The presentation timestamp of the frame, in seconds.
+  readonly mediaTime: number;
+  // The time from submitting the frame to the decoder until it was ready
+  // for presentation, in seconds.
+  readonly processingDuration: number;
+  // The total number of dropped frames so far.
+  readonly droppedFrames: number;
 }
 
 export interface MediaPipelineAudioOutputInit {
@@ -96,6 +123,13 @@ const DEBUG = false;
 
 // Bug showcases
 const BUG_DECODE_VIDEO_IN_REVERSE = false;
+
+// What we know about a decoded video frame, but the VideoFrame doesn't.
+interface DecodedVideoFrameInfo {
+  readonly width: number;
+  readonly height: number;
+  readonly processingDuration: number;
+}
 
 // A decoded audio frame, with the timestamp and duration of the encoded chunk
 // it was decoded from. The decoder does not preserve those itself, see
@@ -161,6 +195,24 @@ export class MediaPipeline implements MediaSourceAttachment {
   #lastRenderedFrame: number | undefined = undefined;
   #nextRenderFrame: number = 0;
   #needKeyFrame: boolean = true;
+  // Frames that are only decoded because a later frame depends on them,
+  // e.g. the frames between a key frame and the seek target.
+  // They are never meant to be presented, so they don't count as dropped.
+  #prerollVideoFrames: WeakSet<EncodedVideoChunk> = new WeakSet();
+  // When each frame was submitted to the decoder, for its processingDuration.
+  #videoFrameDecodeStartTimes: WeakMap<EncodedVideoChunk, number> =
+    new WeakMap();
+  #decodedVideoFrameInfo: WeakMap<VideoFrame, DecodedVideoFrameInfo> =
+    new WeakMap();
+  // https://w3c.github.io/media-playback-quality/#concepts
+  // The dropped video frame count, kept here because only the pipeline knows
+  // when a frame misses its display deadline. The element keeps the rest.
+  #droppedVideoFrames: number = 0;
+  #reportedDroppedVideoFrames: number = 0;
+  // The timestamp of the last animation frame that rendered video,
+  // and the time between the last two, to estimate when the next one is.
+  #lastRenderTime: number = 0;
+  #renderInterval: number = 1000 / 60;
 
   readonly #audioDecoder: AudioDecoder;
   #lastAudioDecoderConfig: AudioDecoderConfig | undefined = undefined;
@@ -463,7 +515,7 @@ export class MediaPipeline implements MediaSourceAttachment {
       const currentTime = this.#getCurrentPlaybackPosition(now);
       this.#lastAdvanceTime = now;
       this.#setCurrentTime(currentTime);
-      this.#renderVideoFrame();
+      this.#renderVideoFrame(now);
       this.#host.onTimeUpdate(this.#currentTime, true);
     } finally {
       this.#advancing = false;
@@ -624,7 +676,8 @@ export class MediaPipeline implements MediaSourceAttachment {
       }
       this.#processVideoDecodeQueue(
         videoTrackBuffer.getDecodeDependenciesForFrame(frameAtTime),
-        direction
+        direction,
+        frameAtTime
       );
     }
     // Decode next frames in advance
@@ -645,9 +698,13 @@ export class MediaPipeline implements MediaSourceAttachment {
     }
   }
 
+  // Decodes the frames in the queue. Going forward, the frames that end
+  // before `firstFrameToPresent` are only decoded because that frame
+  // depends on them.
   #processVideoDecodeQueue(
     decodeQueue: VideoDecodeQueue,
-    direction: Direction
+    direction: Direction,
+    firstFrameToPresent?: EncodedVideoChunk
   ): void {
     const { frames, codecConfig } = decodeQueue;
     if (DEBUG) {
@@ -666,7 +723,13 @@ export class MediaPipeline implements MediaSourceAttachment {
     if (direction === Direction.BACKWARD && BUG_DECODE_VIDEO_IN_REVERSE) {
       frames.reverse();
     }
+    const prerollEnd =
+      direction === Direction.FORWARD && firstFrameToPresent !== undefined
+        ? firstFrameToPresent.timestamp
+        : -Infinity;
     for (const frame of frames) {
+      // The frames are in decode order, so check their presentation time.
+      const isPreroll = frame.timestamp + (frame.duration ?? 0) <= prerollEnd;
       if (this.#needKeyFrame) {
         if (frame.type === "key") {
           this.#needKeyFrame = false;
@@ -675,6 +738,12 @@ export class MediaPipeline implements MediaSourceAttachment {
           continue;
         }
       }
+      if (isPreroll) {
+        this.#prerollVideoFrames.add(frame);
+      } else {
+        this.#prerollVideoFrames.delete(frame);
+      }
+      this.#videoFrameDecodeStartTimes.set(frame, performance.now());
       this.#videoDecoder.decode(frame);
       this.#decodingVideoFrames.push(frame);
     }
@@ -721,6 +790,13 @@ export class MediaPipeline implements MediaSourceAttachment {
           `dropping decoded video frame at timestamp=${decodingFrame.timestamp}, beyond currentTime=${currentTimeInMicros}us`
         );
       }
+      // https://w3c.github.io/media-playback-quality/#concepts
+      // The dropped video frame count is incremented when a video frame is
+      // decoded but dropped because it missed a display deadline.
+      // (A preroll frame never had a display deadline.)
+      if (!this.#prerollVideoFrames.has(decodingFrame)) {
+        this.#droppedVideoFrames++;
+      }
       frame.close();
       // Decode more frames (if we now have more space in the queue)
       this.#decodeVideoFrames();
@@ -739,6 +815,18 @@ export class MediaPipeline implements MediaSourceAttachment {
       timestamp: decodingFrame.timestamp,
       duration: decodingFrame.duration!
     });
+    // https://wicg.github.io/video-rvfc/#dom-videoframecallbackmetadata-processingduration
+    // The elapsed duration from submission of the encoded packet to the decoder
+    // until the decoded frame was ready for presentation. That includes our
+    // copy to an ImageBitmap.
+    const decodeStartTime =
+      this.#videoFrameDecodeStartTimes.get(decodingFrame) ?? performance.now();
+    this.#decodedVideoFrameInfo.set(newFrame, {
+      // In media pixels, i.e. before applying the pixel aspect ratio.
+      width: frame.visibleRect?.width ?? frame.codedWidth,
+      height: frame.visibleRect?.height ?? frame.codedHeight,
+      processingDuration: (performance.now() - decodeStartTime) / 1000
+    });
     frame.close();
     frame = newFrame;
     this.#decodedVideoFrames.push(newFrame);
@@ -756,20 +844,32 @@ export class MediaPipeline implements MediaSourceAttachment {
 
   #scheduleRenderVideoFrame() {
     if (this.#nextRenderFrame === 0) {
-      this.#nextRenderFrame = requestAnimationFrame(() =>
-        this.#renderVideoFrame()
+      this.#nextRenderFrame = requestAnimationFrame((now) =>
+        this.#renderVideoFrame(now)
       );
     }
   }
 
-  #renderVideoFrame(): void {
+  // Renders the video frame at the current playback position.
+  // Always runs in an animation frame callback, with its timestamp as `now`.
+  #renderVideoFrame(now: number): void {
     this.#nextRenderFrame = 0;
+    const lastRenderInterval = now - this.#lastRenderTime;
+    if (lastRenderInterval > 0 && lastRenderInterval < 100) {
+      // Probably one display frame (or a few, if we missed some).
+      this.#renderInterval = lastRenderInterval;
+    }
+    this.#lastRenderTime = now;
     const currentTimeInMicros = Math.floor(1e6 * this.#currentTime);
     const direction = this.#frameDirectionAt(currentTimeInMicros);
     // Drop all frames that are before current time, since we're too late to render them.
     for (let i = this.#decodedVideoFrames.length - 1; i >= 0; i--) {
       const frame = this.#decodedVideoFrames[i];
       if (isFrameBeyondTime(frame, direction, currentTimeInMicros)) {
+        // https://w3c.github.io/media-playback-quality/#concepts
+        // The dropped video frame count is incremented when a video frame is
+        // decoded but dropped because it missed a display deadline.
+        this.#droppedVideoFrames++;
         frame.close();
         arrayRemoveAt(this.#decodedVideoFrames, i);
       }
@@ -779,6 +879,7 @@ export class MediaPipeline implements MediaSourceAttachment {
       isFrameAtTime(frame, direction, currentTimeInMicros)
     );
     if (currentFrameIndex < 0) {
+      this.#reportDroppedVideoFrames();
       // Decode more frames (if we now have more space in the queue)
       this.#decodeVideoFrames();
       return;
@@ -798,10 +899,42 @@ export class MediaPipeline implements MediaSourceAttachment {
       );
       arrayRemoveAt(this.#decodedVideoFrames, currentFrameIndex);
       this.#lastRenderedFrame = frame.timestamp;
+      this.#presentVideoFrame(frame, now);
       frame.close();
+    } else {
+      this.#reportDroppedVideoFrames();
     }
     // Decode more frames (if we now have more space in the queue)
     this.#decodeVideoFrames();
+  }
+
+  // Tells the media element that we drew a new video frame to the canvas.
+  #presentVideoFrame(frame: VideoFrame, now: number): void {
+    const info = this.#decodedVideoFrameInfo.get(frame);
+    this.#reportedDroppedVideoFrames = this.#droppedVideoFrames;
+    // https://wicg.github.io/video-rvfc/#video-frame-callback-metadata-attributes
+    this.#host.onVideoFramePresented({
+      // We submit the frame for composition by drawing it to the canvas.
+      // The canvas is then shown at the end of this animation frame,
+      // so we expect it on the screen at the next one.
+      presentationTime: performance.timeOrigin + performance.now(),
+      expectedDisplayTime: performance.timeOrigin + now + this.#renderInterval,
+      width: info?.width ?? frame.displayWidth,
+      height: info?.height ?? frame.displayHeight,
+      mediaTime: frame.timestamp / 1e6,
+      // Round to 100µs, as the spec suggests against fingerprinting.
+      // https://wicg.github.io/video-rvfc/#security-and-privacy
+      processingDuration:
+        Math.round((info?.processingDuration ?? 0) * 1e4) / 1e4,
+      droppedFrames: this.#droppedVideoFrames
+    });
+  }
+
+  #reportDroppedVideoFrames(): void {
+    if (this.#reportedDroppedVideoFrames !== this.#droppedVideoFrames) {
+      this.#reportedDroppedVideoFrames = this.#droppedVideoFrames;
+      this.#host.onVideoFramesDropped(this.#droppedVideoFrames);
+    }
   }
 
   #resetVideoDecoder(): void {

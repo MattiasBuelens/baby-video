@@ -8,6 +8,7 @@
 import type { TimeRange } from "./time-ranges";
 import type { MediaReadyState } from "./media-source-attachment";
 import type { AudioClockSnapshot } from "./audio-output";
+import type { PresentedVideoFrame } from "./media-pipeline";
 
 // region Element to pipeline
 
@@ -103,6 +104,18 @@ export interface PipelineResizeMessage {
   readonly height: number;
 }
 
+// https://wicg.github.io/video-rvfc/#video-rvfc-procedures
+export interface PipelineVideoFramePresentedMessage {
+  readonly type: "video-frame-presented";
+  readonly frame: PresentedVideoFrame;
+}
+
+// https://w3c.github.io/media-playback-quality/#concepts
+export interface PipelineVideoFramesDroppedMessage {
+  readonly type: "video-frames-dropped";
+  readonly droppedFrames: number;
+}
+
 export interface PipelineCreateAudioOutputMessage {
   readonly type: "create-audio-output";
   readonly sampleRate: number;
@@ -120,6 +133,8 @@ export type PipelineEventMessage =
   | PipelineTimeUpdateMessage
   | PipelineSeekCompleteMessage
   | PipelineResizeMessage
+  | PipelineVideoFramePresentedMessage
+  | PipelineVideoFramesDroppedMessage
   | PipelineCreateAudioOutputMessage;
 
 // endregion

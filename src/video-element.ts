@@ -5,16 +5,23 @@ import { TimeRange, TimeRanges } from "./time-ranges";
 import { MediaReadyState } from "./media-source-attachment";
 import type {
   MediaPipelineAudioOutputInit,
-  MediaPipelineHost
+  MediaPipelineHost,
+  PresentedVideoFrame
 } from "./media-pipeline";
 import { MediaPipelineEndpoint } from "./media-pipeline-endpoint";
 import { MediaPipelineProxy } from "./media-pipeline-proxy";
 import type { BabyMediaSourceHandle } from "./media-source-handle";
+import { BabyVideoPlaybackQuality } from "./video-playback-quality";
 
 // Ports of handles that were already attached to an element.
 // A handle can only be used once.
 const usedHandlePorts = new WeakSet<MessagePort>();
 import { AudioOutput } from "./audio-output";
+
+// https://wicg.github.io/video-rvfc/#video-rvfc-methods
+// The document's video frame request callback identifier.
+// (There's only one document.)
+let videoFrameRequestCallbackIdentifier = 0;
 
 const template = document.createElement("template");
 template.innerHTML = `<style>${stylesheet}</style>`;
@@ -41,7 +48,14 @@ let updateSize: (
   width: number,
   height: number
 ) => void;
-
+let onVideoFramePresented: (
+  element: BabyVideoElement,
+  frame: PresentedVideoFrame
+) => void;
+let onVideoFramesDropped: (
+  element: BabyVideoElement,
+  droppedFrames: number
+) => void;
 let createAudioOutput: (
   element: BabyVideoElement,
   init: MediaPipelineAudioOutputInit
@@ -84,6 +98,21 @@ export class BabyVideoElement extends HTMLElement {
   #pipelineHost: MediaPipelineHost | undefined;
   #audioOutput: AudioOutput | undefined;
   #audioOutputPlaying: boolean = false;
+
+  // https://wicg.github.io/video-rvfc/#video-rvfc-methods
+  #videoFrameRequestCallbacks: Map<number, VideoFrameRequestCallback> =
+    new Map();
+  #lastPresentedFrameIdentifier: number = 0;
+  // The number of frames presented for composition. Unlike the total video
+  // frame count, this never resets, since presentedFrames MUST be
+  // monotonically increasing.
+  #presentedFrames: number = 0;
+  #latestPresentedFrame: VideoFrameCallbackMetadata | undefined;
+  #videoFrameCallbacksAnimationFrame: number = 0;
+
+  // https://w3c.github.io/media-playback-quality/#concepts
+  #totalVideoFrameCount: number = 0;
+  #droppedVideoFrameCount: number = 0;
 
   constructor() {
     super();
@@ -291,6 +320,13 @@ export class BabyVideoElement extends HTMLElement {
     this.#lastPlayedTime = NaN;
     clearTimeout(this.#nextProgressTimer);
     this.#lastTimeUpdate = 0;
+    // https://w3c.github.io/media-playback-quality/#concepts
+    // The total and dropped video frame counts are reset to 0
+    // when the media element load algorithm is invoked.
+    this.#totalVideoFrameCount = 0;
+    this.#droppedVideoFrameCount = 0;
+    // There's no frame from the new source yet.
+    this.#latestPresentedFrame = undefined;
     queueTask(() => this.dispatchEvent(new Event("emptied")));
     if (srcObject) {
       this.#pipelineHost = new BabyVideoElementPipelineHost(this);
@@ -323,6 +359,51 @@ export class BabyVideoElement extends HTMLElement {
 
   get videoHeight(): number {
     return this.#videoHeight;
+  }
+
+  // https://wicg.github.io/video-rvfc/#dom-htmlvideoelement-requestvideoframecallback
+  requestVideoFrameCallback(callback: VideoFrameRequestCallback): number {
+    if (typeof callback !== "function") {
+      throw new TypeError("callback must be a function");
+    }
+    // 1. Let video be the HTMLVideoElement on which requestVideoFrameCallback is invoked.
+    // 2. Increment video's ownerDocument's video frame request callback identifier by one.
+    videoFrameRequestCallbackIdentifier++;
+    // 3. Let callbackId be video's ownerDocument's video frame request callback identifier
+    const callbackId = videoFrameRequestCallbackIdentifier;
+    // 4. Append callback to video's list of video frame request callbacks, associated with callbackId.
+    this.#videoFrameRequestCallbacks.set(callbackId, callback);
+    // A frame may already have been presented, which the callback should see
+    // at the next rendering.
+    this.#scheduleVideoFrameRequestCallbacks();
+    // 5. Return callbackId.
+    return callbackId;
+  }
+
+  // https://wicg.github.io/video-rvfc/#dom-htmlvideoelement-cancelvideoframecallback
+  cancelVideoFrameCallback(handle: number): void {
+    // 2. Find the entry in video's list of video frame request callbacks that is associated with the value handle.
+    // 3. If there is such an entry, set its canceled boolean to true and remove it
+    //    from video's list of video frame request callbacks.
+    // (We only run the callbacks that are still in the list, see
+    // #runVideoFrameRequestCallbacks, so removing it is enough.)
+    this.#videoFrameRequestCallbacks.delete(handle);
+  }
+
+  // https://w3c.github.io/media-playback-quality/#dom-htmlvideoelement-getvideoplaybackquality
+  getVideoPlaybackQuality(): BabyVideoPlaybackQuality {
+    // 1. Let playbackQuality be a new instance of VideoPlaybackQuality.
+    // 2. Set playbackQuality.creationTime to the current high resolution time.
+    // 3. Set playbackQuality.totalVideoFrames to the current value of the total video frame count.
+    // 4. Set playbackQuality.droppedVideoFrames to the current value of the dropped video frame count.
+    // 5. [DEPRECATED] Set playbackQuality.corruptedVideoFrames to the current value of the corrupted video frame count.
+    //    (Always 0.)
+    // 6. Return playbackQuality.
+    return new BabyVideoPlaybackQuality(
+      performance.now(),
+      this.#droppedVideoFrameCount,
+      this.#totalVideoFrameCount
+    );
   }
 
   get volume(): number {
@@ -800,6 +881,90 @@ export class BabyVideoElement extends HTMLElement {
     this.#isEndOfStream = true;
   }
 
+  #onVideoFramePresented(frame: PresentedVideoFrame): void {
+    // https://w3c.github.io/media-playback-quality/#concepts
+    // The total video frame count is incremented when a video frame is displayed,
+    // and when the dropped video frame count is incremented.
+    this.#onVideoFramesDropped(frame.droppedFrames);
+    this.#totalVideoFrameCount++;
+    this.#presentedFrames++;
+    // https://wicg.github.io/video-rvfc/#video-frame-callback-metadata-attributes
+    // The pipeline may live in a worker, with a different time origin.
+    this.#latestPresentedFrame = {
+      presentationTime: frame.presentationTime - performance.timeOrigin,
+      expectedDisplayTime: frame.expectedDisplayTime - performance.timeOrigin,
+      width: frame.width,
+      height: frame.height,
+      mediaTime: frame.mediaTime,
+      presentedFrames: this.#presentedFrames,
+      processingDuration: frame.processingDuration
+    };
+    this.#scheduleVideoFrameRequestCallbacks();
+  }
+
+  #onVideoFramesDropped(droppedFrames: number): void {
+    // https://w3c.github.io/media-playback-quality/#concepts
+    // The total video frame count is incremented when the dropped video frame count is incremented.
+    this.#totalVideoFrameCount += droppedFrames - this.#droppedVideoFrameCount;
+    this.#droppedVideoFrameCount = droppedFrames;
+  }
+
+  // https://wicg.github.io/video-rvfc/#video-rvfc-procedures
+  // The callbacks run in the update the rendering steps, right before the
+  // animation frame callbacks. We can't hook into those steps, so we run them
+  // in an animation frame callback of our own instead.
+  #scheduleVideoFrameRequestCallbacks(): void {
+    if (
+      this.#videoFrameCallbacksAnimationFrame === 0 &&
+      this.#videoFrameRequestCallbacks.size > 0 &&
+      this.#latestPresentedFrame !== undefined &&
+      this.#latestPresentedFrame.presentedFrames !==
+        this.#lastPresentedFrameIdentifier
+    ) {
+      this.#videoFrameCallbacksAnimationFrame = requestAnimationFrame((now) => {
+        this.#videoFrameCallbacksAnimationFrame = 0;
+        this.#runVideoFrameRequestCallbacks(now);
+      });
+    }
+  }
+
+  // https://wicg.github.io/video-rvfc/#run-the-video-frame-request-callbacks
+  #runVideoFrameRequestCallbacks(now: number): void {
+    // 1. If video's list of video frame request callbacks is empty, abort these steps.
+    if (this.#videoFrameRequestCallbacks.size === 0) {
+      return;
+    }
+    // 2. Let metadata be the VideoFrameCallbackMetadata dictionary built from video's latest presented frame.
+    const metadata = this.#latestPresentedFrame;
+    if (metadata === undefined) {
+      return;
+    }
+    // 3. Let presentedFrames be the value of metadata's presentedFrames field.
+    const presentedFrames = metadata.presentedFrames;
+    // 4. If the last presented frame identifier is equal to presentedFrames, abort these steps.
+    if (this.#lastPresentedFrameIdentifier === presentedFrames) {
+      return;
+    }
+    // 5. Set the last presented frame identifier to presentedFrames.
+    this.#lastPresentedFrameIdentifier = presentedFrames;
+    // 6. Let callbacks be the list of video frame request callbacks.
+    const callbacks = this.#videoFrameRequestCallbacks;
+    // 7. Set video's list of video frame request callbacks to be empty.
+    this.#videoFrameRequestCallbacks = new Map();
+    // 8. For each entry of callbacks:
+    for (const callback of callbacks.values()) {
+      // 8.1. If entry's canceled boolean is true, continue.
+      //      (Canceled entries were removed from the list before we got here.)
+      // 8.2. Invoke entry with « now, metadata » and "report".
+      //      (Each invocation converts the dictionary to a new JavaScript object.)
+      try {
+        callback.call(undefined, now, { ...metadata });
+      } catch (e) {
+        reportError(e);
+      }
+    }
+  }
+
   static {
     getPipelineHost = (element) => element.#pipelineHost;
     updateReadyState = (element, readyState) =>
@@ -811,6 +976,10 @@ export class BabyVideoElement extends HTMLElement {
       element.#onTimeUpdate(currentTime, isNormalPlayback);
     onSeekComplete = (element) => element.#onSeekComplete();
     updateSize = (element, width, height) => element.#updateSize(width, height);
+    onVideoFramePresented = (element, frame) =>
+      element.#onVideoFramePresented(frame);
+    onVideoFramesDropped = (element, droppedFrames) =>
+      element.#onVideoFramesDropped(droppedFrames);
     createAudioOutput = (element, init) => element.#createAudioOutput(init);
   }
 }
@@ -861,6 +1030,14 @@ class BabyVideoElementPipelineHost implements MediaPipelineHost {
 
   onResize(width: number, height: number): void {
     if (this.#isCurrent()) updateSize(this.#element, width, height);
+  }
+
+  onVideoFramePresented(frame: PresentedVideoFrame): void {
+    if (this.#isCurrent()) onVideoFramePresented(this.#element, frame);
+  }
+
+  onVideoFramesDropped(droppedFrames: number): void {
+    if (this.#isCurrent()) onVideoFramesDropped(this.#element, droppedFrames);
   }
 
   createAudioOutput(init: MediaPipelineAudioOutputInit): void {
