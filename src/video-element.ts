@@ -25,6 +25,10 @@ import {
   VideoTrackBuffer
 } from "./track-buffer";
 import { BabyAudioSink } from "./audio-sink";
+import {
+  MediaReadyState,
+  type MediaSourceAttachment
+} from "./media-source-attachment";
 import type {
   AudioSinkDirection,
   AudioSinkStatusMessage
@@ -32,25 +36,6 @@ import type {
 
 const template = document.createElement("template");
 template.innerHTML = `<style>${stylesheet}</style>`;
-
-export enum MediaReadyState {
-  HAVE_NOTHING,
-  HAVE_METADATA,
-  HAVE_CURRENT_DATA,
-  HAVE_FUTURE_DATA,
-  HAVE_ENOUGH_DATA
-}
-
-export let updateDuration: (
-  videoElement: BabyVideoElement,
-  newDuration: number
-) => void;
-export let updateReadyState: (
-  videoElement: BabyVideoElement,
-  newReadyState: MediaReadyState
-) => void;
-export let notifyProgress: (videoElement: BabyVideoElement) => void;
-export let notifyEndOfStream: (videoElement: BabyVideoElement) => void;
 
 // Low and high watermark for decode queue
 // If the queue drops below the LWM, we try to fill it with up to HWM new frames
@@ -160,6 +145,27 @@ export class BabyVideoElement extends HTMLElement {
   #pushedAudioChunks: PushedAudioChunk[] = [];
   // Audio that was decoded while the audio worklet module was still loading.
   #pendingAudioFrames: DecodedAudioFrame[] = [];
+
+  // The view of this element that an attached BabyMediaSource gets to see.
+  readonly #attachment: MediaSourceAttachment = (() => {
+    const element = this;
+    return {
+      get readyState() {
+        return element.#readyState;
+      },
+      get currentTime() {
+        return element.#currentTime;
+      },
+      get playbackRate() {
+        return element.#playbackRate;
+      },
+      updateDuration: (newDuration) => element.#updateDuration(newDuration),
+      updateReadyState: (newReadyState) =>
+        element.#updateReadyState(newReadyState),
+      notifyProgress: () => element.#notifyProgress(),
+      notifyEndOfStream: () => element.#notifyEndOfStream()
+    };
+  })();
 
   constructor() {
     super();
@@ -321,7 +327,7 @@ export class BabyVideoElement extends HTMLElement {
     this.#updatePlaying();
     queueTask(() => this.dispatchEvent(new Event("emptied")));
     if (srcObject) {
-      attachToMediaElement(srcObject, this);
+      attachToMediaElement(srcObject, this.#attachment);
     }
   }
 
@@ -1527,24 +1533,6 @@ export class BabyVideoElement extends HTMLElement {
 
   #notifyEndOfStream(): void {
     this.#isEndOfStream = true;
-  }
-
-  static {
-    updateDuration = (videoElement: BabyVideoElement, newDuration: number) => {
-      videoElement.#updateDuration(newDuration);
-    };
-    updateReadyState = (
-      videoElement: BabyVideoElement,
-      newReadyState: MediaReadyState
-    ) => {
-      videoElement.#updateReadyState(newReadyState);
-    };
-    notifyProgress = (videoElement: BabyVideoElement) => {
-      videoElement.#notifyProgress();
-    };
-    notifyEndOfStream = (videoElement: BabyVideoElement) => {
-      videoElement.#notifyEndOfStream();
-    };
   }
 }
 
