@@ -138,7 +138,8 @@ export class BabyVideoElement extends HTMLElement {
   // Whether the muted content attribute was applied, see connectedCallback().
   #initializedMuted: boolean = false;
   readonly #poster: HTMLImageElement;
-  readonly #dimensionsStyle: HTMLStyleElement;
+  // A :host rule for the width and height content attributes.
+  readonly #dimensionsStyle: CSSStyleDeclaration;
   #networkState: NetworkState = NetworkState.NETWORK_EMPTY;
   // Tasks queued on the media element event task source that haven't run yet.
   // The media element load algorithm discards them.
@@ -207,8 +208,12 @@ export class BabyVideoElement extends HTMLElement {
     this.#poster.hidden = true;
     shadow.appendChild(this.#poster);
     // The width and height content attributes, see #updateDimensions().
-    this.#dimensionsStyle = document.createElement("style");
-    shadow.appendChild(this.#dimensionsStyle);
+    // Like the other shadow styles, the page's own CSS overrides it,
+    // just like it overrides the presentational hints of a <video>.
+    const dimensionsSheet = new CSSStyleSheet();
+    dimensionsSheet.insertRule(":host {}");
+    this.#dimensionsStyle = (dimensionsSheet.cssRules[0] as CSSStyleRule).style;
+    shadow.adoptedStyleSheets = [...shadow.adoptedStyleSheets, dimensionsSheet];
 
     const canvasContext = this.#canvas.getContext("2d")!;
     canvasContext.fillStyle = "black";
@@ -375,15 +380,14 @@ export class BabyVideoElement extends HTMLElement {
   // The width and height attributes map to the dimension properties width and height on the element.
   // Like presentational hints, author styles on the element override them.
   #updateDimensions(): void {
-    const width = parseDimension(this.getAttribute("width"));
-    const height = parseDimension(this.getAttribute("height"));
-    const declarations = [
-      width !== undefined ? `width: ${width}px;` : "",
-      height !== undefined ? `height: ${height}px;` : ""
-    ].join(" ");
-    this.#dimensionsStyle.textContent = declarations
-      ? `:host { ${declarations} }`
-      : "";
+    for (const name of ["width", "height"] as const) {
+      const value = parseDimension(this.getAttribute(name));
+      if (value === undefined) {
+        this.#dimensionsStyle.removeProperty(name);
+      } else {
+        this.#dimensionsStyle.setProperty(name, `${value}px`);
+      }
+    }
   }
 
   // endregion

@@ -98,6 +98,18 @@ test("width and height set the size", async ({ page }) => {
     return window.mutedVideo.getBoundingClientRect().width;
   });
   expect(styled).toBe(200);
+  // Changing or removing the attributes updates the size.
+  const sizes = await page.evaluate(() => {
+    const video = window.mutedVideo;
+    video.style.width = "";
+    video.width = 400;
+    const changed = video.getBoundingClientRect().width;
+    video.removeAttribute("width");
+    const removed = video.getBoundingClientRect().width;
+    return { changed, removed };
+  });
+  expect(sizes.changed).toBe(400);
+  expect(sizes.removed).not.toBe(400);
 });
 
 test("event handler properties work", async ({ page }) => {
