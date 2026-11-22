@@ -1,5 +1,6 @@
 import "media-chrome";
 import "media-chrome/menu";
+import "./loop-button";
 import { BabyMediaSource, BabyVideoElement } from "../src/index";
 import { TimeRanges } from "../src/time-ranges";
 import {
