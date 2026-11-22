@@ -126,8 +126,8 @@ main {
   main {
     grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
     grid-template-areas:
+      "player experiments"
       "player events"
-      "experiments events"
       "frames events"
       "buffer events";
     grid-template-rows: auto auto auto 1fr;
@@ -181,13 +181,6 @@ media-mute-button + media-volume-range {
   /* Set the internal width so it reveals, not grows */
   --media-range-track-width: 70px;
   transition: width 0.2s ease-in;
-}
-
-/* <media-loop-button> is built for a settings menu, where it fills the row.
-   In the control bar, size it to its "Loop" label and check mark instead. */
-media-control-bar media-loop-button {
-  width: auto;
-  gap: 0.25rem;
 }
 
 /* Expand volume control when hovered or focused */
