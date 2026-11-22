@@ -77,15 +77,29 @@
           <button type="button" data-rate="1">▶️ Play forwards</button>
         </div>
 
-        <p class="pipeline-mode">
-          <span class="pipeline-mode-label"></span>
-          <a></a>
+        <p class="hint">
+          <a href="https://peach.blender.org/">Big Buck Bunny</a> © Blender
+          Foundation, licensed under
+          <a href="https://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a>.
+        </p>
+      </section>
+
+      <section class="panel experiments" aria-labelledby="experiments-heading">
+        <h2 id="experiments-heading">Experiments</h2>
+        <div class="experiment pipeline-mode">
+          <p>
+            <span class="pipeline-mode-label"></span>
+            <a></a>
+          </p>
           <button type="button" name="block">
             🧱 Block main thread for 2s
           </button>
-        </p>
-
-        <p class="bug-showcase">
+          <p class="hint">
+            Block the main thread in both modes, and compare what happens to the
+            video.
+          </p>
+        </div>
+        <div class="experiment">
           <button
             type="button"
             name="bug-decode-in-reverse"
@@ -93,17 +107,11 @@
           >
             🐛 Decode backwards
           </button>
-          <span class="hint"
-            >Play backwards with this on to feed the decoder its frames in
-            reverse order, instead of in decode order.</span
-          >
-        </p>
-
-        <p class="hint">
-          <a href="https://peach.blender.org/">Big Buck Bunny</a> © Blender
-          Foundation, licensed under
-          <a href="https://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a>.
-        </p>
+          <p class="hint">
+            A bug on purpose: when playing backwards, feed the decoder its
+            frames in reverse order, instead of in decode order.
+          </p>
+        </div>
       </section>
 
       <section class="panel frame-stats" aria-labelledby="frames-heading">

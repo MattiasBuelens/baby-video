@@ -116,6 +116,7 @@ main {
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
     "player"
+    "experiments"
     "frames"
     "buffer"
     "events";
@@ -126,14 +127,19 @@ main {
     grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
     grid-template-areas:
       "player events"
+      "experiments events"
       "frames events"
       "buffer events";
-    grid-template-rows: auto auto 1fr;
+    grid-template-rows: auto auto auto 1fr;
   }
 }
 
 .player {
   grid-area: player;
+}
+
+.experiments {
+  grid-area: experiments;
 }
 
 .frame-stats {
@@ -469,13 +475,20 @@ button[aria-pressed="true"] {
   opacity: 0.6;
 }
 
-.pipeline-mode,
-.bug-showcase {
+.experiment {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem 1rem;
-  margin: 0.75rem 0 0;
+  margin-top: 0.75rem;
+}
+
+.experiment p {
+  margin: 0;
+}
+
+.experiment .hint {
+  flex-basis: 100%;
 }
 
 .pipeline-mode a:empty {
