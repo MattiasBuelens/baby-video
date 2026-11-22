@@ -101,26 +101,30 @@ if (useWorker) {
   ]);
 }
 
-// Shows which mode we're in, links to the other one, and offers to block the
-// main thread to show the difference.
+// Shows which mode we're in, offers to reload in the other one, and offers to
+// block the main thread to show the difference.
 function setupModeToggle(useWorker: boolean) {
   const mode = document.querySelector<HTMLElement>(".pipeline-mode")!;
-  const link = mode.querySelector<HTMLAnchorElement>("a")!;
+  const switchButton = mode.querySelector<HTMLButtonElement>(
+    "button[name=switch-mode]"
+  )!;
   const label = mode.querySelector<HTMLElement>(".pipeline-mode-label")!;
   const url = new URL(location.href);
   if (useWorker) {
     label.textContent = "MediaSource and media pipeline run in a worker.";
     url.searchParams.delete("worker");
-    link.textContent = "Run them on the main thread";
+    switchButton.textContent = "🔀 Run on the main thread";
+    switchButton.hidden = false;
   } else {
     label.textContent =
       "MediaSource and media pipeline run on the main thread.";
     url.searchParams.set("worker", "");
-    link.textContent = BabyMediaSource.canConstructInDedicatedWorker
-      ? "Run them in a worker"
-      : "";
+    switchButton.textContent = "🔀 Run in a worker";
+    switchButton.hidden = !BabyMediaSource.canConstructInDedicatedWorker;
   }
-  link.href = url.href;
+  switchButton.addEventListener("click", () => {
+    location.href = url.href;
+  });
   mode
     .querySelector<HTMLButtonElement>("button[name=block]")!
     .addEventListener("click", () => {

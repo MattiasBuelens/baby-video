@@ -480,10 +480,6 @@ button[aria-pressed="true"] {
   margin: 0;
 }
 
-.experiment .hint {
+.experiment :is(.hint, .pipeline-mode-label) {
   flex-basis: 100%;
-}
-
-.pipeline-mode a:empty {
-  display: none;
 }
