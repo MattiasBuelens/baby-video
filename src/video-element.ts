@@ -7,6 +7,7 @@ import type {
   MediaPipelineAudioOutputInit,
   MediaPipelineError,
   MediaPipelineHost,
+  MediaPipelineInit,
   PresentedVideoFrame
 } from "./media-pipeline";
 import { MediaPipelineEndpoint } from "./media-pipeline-endpoint";
@@ -150,6 +151,7 @@ export class BabyVideoElement extends HTMLElement {
   #muted: boolean = false;
   #paused: boolean = true;
   #playbackRate: number = 1;
+  #bugDecodeVideoInReverse: boolean = false;
   #played: TimeRanges = new TimeRanges([]);
   #readyState: MediaReadyState = MediaReadyState.HAVE_NOTHING;
   #seeking: boolean = false;
@@ -388,6 +390,29 @@ export class BabyVideoElement extends HTMLElement {
         this.#dimensionsStyle.setProperty(name, `${value}px`);
       }
     }
+  }
+
+  // endregion
+
+  // region Bug showcases
+
+  // Not part of HTMLMediaElement. Turns on a bug from the "curious player of
+  // Benjamin Button" talk: when playing backwards, feed the video frames to
+  // the decoder in reverse order, i.e. in the order we want to render them.
+  // The decoder expects them in decode order, starting from a key frame,
+  // so it shows garbage or fails. If it fails, the video stalls (rather than
+  // the element going into an error state) until this is turned off again.
+  get bugDecodeVideoInReverse(): boolean {
+    return this.#bugDecodeVideoInReverse;
+  }
+
+  set bugDecodeVideoInReverse(value: boolean) {
+    value = Boolean(value);
+    if (value === this.#bugDecodeVideoInReverse) {
+      return;
+    }
+    this.#bugDecodeVideoInReverse = value;
+    this.#pipeline?.setBugDecodeVideoInReverse(value);
   }
 
   // endregion
@@ -757,7 +782,7 @@ export class BabyVideoElement extends HTMLElement {
       // so the pipeline can render to our own canvas directly.
       const { port1, port2 } = new MessageChannel();
       this.#pipelineEndpoint = new MediaPipelineEndpoint(srcObject, port2);
-      this.#pipelineEndpoint.attach(this.#getCanvas(), this.#playbackRate);
+      this.#pipelineEndpoint.attach(this.#getCanvas(), this.#pipelineInit());
       this.#pipeline = new MediaPipelineProxy(port1, this.#pipelineHost);
     } else {
       // The MediaSource is in a worker, at the other end of the handle's port.
@@ -766,8 +791,15 @@ export class BabyVideoElement extends HTMLElement {
         srcObject.port,
         this.#pipelineHost
       );
-      this.#pipeline.attach(this.#transferCanvas(), this.#playbackRate);
+      this.#pipeline.attach(this.#transferCanvas(), this.#pipelineInit());
     }
+  }
+
+  #pipelineInit(): MediaPipelineInit {
+    return {
+      playbackRate: this.#playbackRate,
+      bugDecodeVideoInReverse: this.#bugDecodeVideoInReverse
+    };
   }
 
   // https://html.spec.whatwg.org/multipage/media.html#media-data-processing-steps-list

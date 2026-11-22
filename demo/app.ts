@@ -1,5 +1,6 @@
 import "media-chrome";
 import "media-chrome/menu";
+import "./loop-button";
 import { BabyMediaSource, BabyVideoElement } from "../src/index";
 import { TimeRanges } from "../src/time-ranges";
 import {
@@ -18,6 +19,7 @@ video.poster = new URL("./poster.jpg", import.meta.url).href;
 setupEventLog(video, document.querySelector(".event-log")!);
 setupFrameStats(video, document.querySelector(".frame-stats")!);
 setupPlaybackButtons(video);
+setupBugShowcase(video);
 
 // Run the MediaSource (and with it, the whole media pipeline) in a dedicated
 // worker with ?worker, or on the main thread otherwise.
@@ -99,27 +101,36 @@ if (useWorker) {
   ]);
 }
 
-// Shows which mode we're in, links to the other one, and offers to block the
-// main thread to show the difference.
+// Shows which mode we're in, offers to reload in the other one, and offers to
+// block the main thread to show the difference.
 function setupModeToggle(useWorker: boolean) {
   const mode = document.querySelector<HTMLElement>(".pipeline-mode")!;
-  const link = mode.querySelector<HTMLAnchorElement>("a")!;
+  const switchButton = mode.querySelector<HTMLButtonElement>(
+    "button[name=switch-mode]"
+  )!;
   const label = mode.querySelector<HTMLElement>(".pipeline-mode-label")!;
   const url = new URL(location.href);
   if (useWorker) {
-    label.textContent = "MediaSource and media pipeline run in a worker.";
-    url.searchParams.delete("worker");
-    link.textContent = "Run them on the main thread";
-  } else {
     label.textContent =
-      "MediaSource and media pipeline run on the main thread.";
+      "The MediaSource and media pipeline now run in a worker. " +
+      "This reloads the page with them on the main thread.";
+    url.searchParams.delete("worker");
+    switchButton.textContent = "🔀 Run on the main thread";
+    switchButton.hidden = false;
+  } else {
+    label.textContent = BabyMediaSource.canConstructInDedicatedWorker
+      ? "The MediaSource and media pipeline now run on the main thread. " +
+        "This reloads the page with them in a worker."
+      : "The MediaSource and media pipeline run on the main thread. " +
+        "This browser can't run them in a worker.";
     url.searchParams.set("worker", "");
-    link.textContent = BabyMediaSource.canConstructInDedicatedWorker
-      ? "Run them in a worker"
-      : "";
+    switchButton.textContent = "🔀 Run in a worker";
+    switchButton.hidden = !BabyMediaSource.canConstructInDedicatedWorker;
   }
-  link.href = url.href;
-  mode
+  switchButton.addEventListener("click", () => {
+    location.href = url.href;
+  });
+  document
     .querySelector<HTMLButtonElement>("button[name=block]")!
     .addEventListener("click", () => {
       const end = performance.now() + 2000;
@@ -127,6 +138,17 @@ function setupModeToggle(useWorker: boolean) {
         // Keep the main thread busy.
       }
     });
+}
+
+// Toggles the bugs that <baby-video> can show on purpose.
+function setupBugShowcase(video: BabyVideoElement) {
+  const button = document.querySelector<HTMLButtonElement>(
+    "button[name=bug-decode-in-reverse]"
+  )!;
+  button.addEventListener("click", () => {
+    video.bugDecodeVideoInReverse = !video.bugDecodeVideoInReverse;
+    button.setAttribute("aria-pressed", String(video.bugDecodeVideoInReverse));
+  });
 }
 
 function setupPlaybackButtons(video: BabyVideoElement) {
@@ -148,10 +170,4 @@ function setupPlaybackButtons(video: BabyVideoElement) {
   for (const type of ["ratechange", "play", "pause", "ended"]) {
     video.addEventListener(type, updatePressed);
   }
-  const loopButton =
-    document.querySelector<HTMLButtonElement>("button[name=loop]")!;
-  loopButton.addEventListener("click", () => {
-    video.loop = !video.loop;
-    loopButton.setAttribute("aria-pressed", String(video.loop));
-  });
 }

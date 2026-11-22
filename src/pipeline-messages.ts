@@ -8,7 +8,11 @@
 import type { TimeRange } from "./time-ranges";
 import type { MediaReadyState } from "./media-source-attachment";
 import type { AudioClockSnapshot } from "./audio-output";
-import type { MediaPipelineError, PresentedVideoFrame } from "./media-pipeline";
+import type {
+  MediaPipelineError,
+  MediaPipelineInit,
+  PresentedVideoFrame
+} from "./media-pipeline";
 
 // region Element to pipeline
 
@@ -16,7 +20,7 @@ export interface PipelineAttachMessage {
   readonly type: "attach";
   // The canvas to render to. Transferred.
   readonly canvas: OffscreenCanvas;
-  readonly playbackRate: number;
+  readonly init: MediaPipelineInit;
 }
 
 export interface PipelineSetPlayingMessage {
@@ -29,6 +33,12 @@ export interface PipelineSetPlayingMessage {
 export interface PipelineSetPlaybackRateMessage {
   readonly type: "set-playback-rate";
   readonly playbackRate: number;
+}
+
+// Bug showcase: see BabyVideoElement.bugDecodeVideoInReverse.
+export interface PipelineSetBugDecodeVideoInReverseMessage {
+  readonly type: "set-bug-decode-video-in-reverse";
+  readonly value: boolean;
 }
 
 // https://html.spec.whatwg.org/multipage/media.html#dom-media-seek (steps 11 and 12)
@@ -52,6 +62,7 @@ export type PipelineCommandMessage =
   | PipelineAttachMessage
   | PipelineSetPlayingMessage
   | PipelineSetPlaybackRateMessage
+  | PipelineSetBugDecodeVideoInReverseMessage
   | PipelineSeekMessage
   | PipelineAudioClockMessage
   | PipelineDetachMessage;

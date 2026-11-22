@@ -65,6 +65,7 @@
             <media-time-display showduration></media-time-display>
             <media-time-range></media-time-range>
             <media-playback-rate-menu-button></media-playback-rate-menu-button>
+            <demo-loop-button></demo-loop-button>
             <media-fullscreen-button></media-fullscreen-button>
           </media-control-bar>
         </media-controller>
@@ -74,24 +75,42 @@
             ⏪ Play backwards
           </button>
           <button type="button" data-rate="1">▶️ Play forwards</button>
-          <button type="button" name="loop" aria-pressed="false">
-            🔁 Loop
-          </button>
         </div>
-
-        <p class="pipeline-mode">
-          <span class="pipeline-mode-label"></span>
-          <a></a>
-          <button type="button" name="block">
-            🧱 Block main thread for 2s
-          </button>
-        </p>
 
         <p class="hint">
           <a href="https://peach.blender.org/">Big Buck Bunny</a> © Blender
           Foundation, licensed under
           <a href="https://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a>.
         </p>
+      </section>
+
+      <section class="panel experiments" aria-labelledby="experiments-heading">
+        <h2 id="experiments-heading">Experiments</h2>
+        <div class="experiment pipeline-mode">
+          <button type="button" name="switch-mode" hidden></button>
+          <p class="hint pipeline-mode-label"></p>
+        </div>
+        <div class="experiment">
+          <button type="button" name="block">
+            🧱 Block main thread for 2s
+          </button>
+          <p class="hint">
+            Try it in both modes, and compare what happens to the video.
+          </p>
+        </div>
+        <div class="experiment">
+          <button
+            type="button"
+            name="bug-decode-in-reverse"
+            aria-pressed="false"
+          >
+            🐛 Decode backwards
+          </button>
+          <p class="hint">
+            A bug on purpose: when playing backwards, feed the decoder its
+            frames in reverse order, instead of in decode order.
+          </p>
+        </div>
       </section>
 
       <section class="panel frame-stats" aria-labelledby="frames-heading">

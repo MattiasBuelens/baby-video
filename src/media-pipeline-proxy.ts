@@ -1,5 +1,5 @@
 import type { AudioClockSnapshot } from "./audio-output";
-import type { MediaPipelineHost } from "./media-pipeline";
+import type { MediaPipelineHost, MediaPipelineInit } from "./media-pipeline";
 import { TimeRanges } from "./time-ranges";
 import type {
   PipelineCommandMessage,
@@ -44,8 +44,8 @@ export class MediaPipelineProxy {
     this.#port.postMessage(message, transfer ?? []);
   }
 
-  attach(canvas: OffscreenCanvas, playbackRate: number): void {
-    this.#post({ type: "attach", canvas, playbackRate }, [canvas]);
+  attach(canvas: OffscreenCanvas, init: MediaPipelineInit): void {
+    this.#post({ type: "attach", canvas, init }, [canvas]);
   }
 
   setPlaying(playing: boolean): void {
@@ -59,6 +59,10 @@ export class MediaPipelineProxy {
 
   setPlaybackRate(playbackRate: number): void {
     this.#post({ type: "set-playback-rate", playbackRate });
+  }
+
+  setBugDecodeVideoInReverse(value: boolean): void {
+    this.#post({ type: "set-bug-decode-video-in-reverse", value });
   }
 
   // https://html.spec.whatwg.org/multipage/media.html#dom-media-seek
