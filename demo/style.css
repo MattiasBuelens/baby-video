@@ -177,6 +177,13 @@ media-mute-button + media-volume-range {
   transition: width 0.2s ease-in;
 }
 
+/* <media-loop-button> is built for a settings menu, where it fills the row.
+   In the control bar, size it to its "Loop" label and check mark instead. */
+media-control-bar media-loop-button {
+  width: auto;
+  gap: 0.25rem;
+}
+
 /* Expand volume control when hovered or focused */
 media-mute-button:is(:hover, :focus, :focus-within) + media-volume-range,
 media-mute-button + media-volume-range:is(:hover, :focus, :focus-within) {

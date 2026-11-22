@@ -160,10 +160,4 @@ function setupPlaybackButtons(video: BabyVideoElement) {
   for (const type of ["ratechange", "play", "pause", "ended"]) {
     video.addEventListener(type, updatePressed);
   }
-  const loopButton =
-    document.querySelector<HTMLButtonElement>("button[name=loop]")!;
-  loopButton.addEventListener("click", () => {
-    video.loop = !video.loop;
-    loopButton.setAttribute("aria-pressed", String(video.loop));
-  });
 }
