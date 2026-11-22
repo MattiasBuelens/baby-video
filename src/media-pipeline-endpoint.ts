@@ -6,6 +6,7 @@ import {
   type MediaPipelineCanvas,
   type MediaPipelineError,
   type MediaPipelineHost,
+  type MediaPipelineInit,
   type PresentedVideoFrame
 } from "./media-pipeline";
 import type { MediaReadyState } from "./media-source-attachment";
@@ -42,13 +43,11 @@ export class MediaPipelineEndpoint implements MediaPipelineHost {
   // https://w3c.github.io/media-source/#mediasource-attach
   // On the main thread, the element calls this directly with its own canvas.
   // From a worker, it sends an "attach" message with an OffscreenCanvas.
-  attach(canvas: MediaPipelineCanvas, playbackRate: number): void {
+  attach(canvas: MediaPipelineCanvas, init: MediaPipelineInit): void {
     if (this.#closed || this.#pipeline !== undefined) {
       return;
     }
-    this.#pipeline = new MediaPipeline(this.#mediaSource, this, canvas, {
-      playbackRate
-    });
+    this.#pipeline = new MediaPipeline(this.#mediaSource, this, canvas, init);
   }
 
   #onMessage(message: PipelineCommandMessage): void {
@@ -56,7 +55,7 @@ export class MediaPipelineEndpoint implements MediaPipelineHost {
       return;
     }
     if (message.type === "attach") {
-      this.attach(message.canvas, message.playbackRate);
+      this.attach(message.canvas, message.init);
       return;
     }
     const pipeline = this.#pipeline;
@@ -69,6 +68,9 @@ export class MediaPipelineEndpoint implements MediaPipelineHost {
         break;
       case "set-playback-rate":
         pipeline.setPlaybackRate(message.playbackRate);
+        break;
+      case "set-bug-decode-video-in-reverse":
+        pipeline.setBugDecodeVideoInReverse(message.value);
         break;
       case "seek":
         this.#seekEpoch = message.epoch;

@@ -18,6 +18,7 @@ video.poster = new URL("./poster.jpg", import.meta.url).href;
 setupEventLog(video, document.querySelector(".event-log")!);
 setupFrameStats(video, document.querySelector(".frame-stats")!);
 setupPlaybackButtons(video);
+setupBugShowcase(video);
 
 // Run the MediaSource (and with it, the whole media pipeline) in a dedicated
 // worker with ?worker, or on the main thread otherwise.
@@ -127,6 +128,17 @@ function setupModeToggle(useWorker: boolean) {
         // Keep the main thread busy.
       }
     });
+}
+
+// Toggles the bugs that <baby-video> can show on purpose.
+function setupBugShowcase(video: BabyVideoElement) {
+  const button = document.querySelector<HTMLButtonElement>(
+    "button[name=bug-decode-in-reverse]"
+  )!;
+  button.addEventListener("click", () => {
+    video.bugDecodeVideoInReverse = !video.bugDecodeVideoInReverse;
+    button.setAttribute("aria-pressed", String(video.bugDecodeVideoInReverse));
+  });
 }
 
 function setupPlaybackButtons(video: BabyVideoElement) {

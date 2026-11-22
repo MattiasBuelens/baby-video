@@ -462,7 +462,8 @@ button[aria-pressed="true"] {
   opacity: 0.6;
 }
 
-.pipeline-mode {
+.pipeline-mode,
+.bug-showcase {
   display: flex;
   flex-wrap: wrap;
   align-items: center;

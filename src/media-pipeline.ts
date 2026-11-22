@@ -112,6 +112,7 @@ type MediaPipelineCanvasContext =
 
 export interface MediaPipelineInit {
   readonly playbackRate: number;
+  readonly bugDecodeVideoInReverse: boolean;
 }
 
 // Low and high watermark for decode queue
@@ -137,9 +138,6 @@ const maxReverseAudioBatchFrames = 16;
 // `VITE_DEBUG=true npm run dev`. Vite replaces this with a constant, so the
 // logging is left out of builds without it.
 const DEBUG = import.meta.env.VITE_DEBUG === "true";
-
-// Bug showcases
-const BUG_DECODE_VIDEO_IN_REVERSE = false;
 
 // What we know about a decoded video frame, but the VideoFrame doesn't.
 interface DecodedVideoFrameInfo {
@@ -189,6 +187,8 @@ export class MediaPipeline implements MediaSourceAttachment {
 
   #currentTime: number = 0;
   #playbackRate: number;
+  // Bug showcase: see BabyVideoElement.bugDecodeVideoInReverse.
+  #bugDecodeVideoInReverse: boolean;
   #readyState: MediaReadyState = MediaReadyState.HAVE_NOTHING;
   // Whether the media element is potentially playing and not seeking,
   // i.e. whether the playback position should advance.
@@ -208,7 +208,7 @@ export class MediaPipeline implements MediaSourceAttachment {
   #seekAbortController: AbortController = new AbortController();
   #nextReadyStateChangePromise: Deferred<void> | undefined = undefined;
 
-  readonly #videoDecoder: VideoDecoder;
+  #videoDecoder: VideoDecoder;
   #lastVideoDecoderConfig: VideoDecoderConfig | undefined = undefined;
   #furthestDecodingVideoFrame: EncodedVideoChunk | undefined = undefined;
   #decodingVideoFrames: EncodedVideoChunk[] = [];
@@ -272,12 +272,9 @@ export class MediaPipeline implements MediaSourceAttachment {
     this.#canvasContext.fillStyle = "black";
     this.#canvasContext.fillRect(0, 0, canvas.width, canvas.height);
     this.#playbackRate = init.playbackRate;
+    this.#bugDecodeVideoInReverse = init.bugDecodeVideoInReverse;
 
-    this.#videoDecoder = new VideoDecoder({
-      output: (frame) => this.#onVideoFrame(frame),
-      // https://html.spec.whatwg.org/multipage/media.html#fatal-decode-error
-      error: (error) => this.#fail("decode", `VideoDecoder: ${error.message}`)
-    });
+    this.#videoDecoder = this.#createVideoDecoder();
 
     this.#audioDecoder = new AudioDecoder({
       output: (data) => this.#onAudioData(data),
@@ -434,6 +431,17 @@ export class MediaPipeline implements MediaSourceAttachment {
     this.#setCurrentTime(currentTime);
     this.#audioSink?.setPlaybackRate(playbackRate);
     this.#host.onTimeUpdate(currentTime, false);
+  }
+
+  // Bug showcase: see BabyVideoElement.bugDecodeVideoInReverse.
+  setBugDecodeVideoInReverse(value: boolean): void {
+    if (this.#stopped || value === this.#bugDecodeVideoInReverse) {
+      return;
+    }
+    this.#bugDecodeVideoInReverse = value;
+    // The decoder may hold frames that were decoded the other way,
+    // so start over from the current position.
+    this.#resetVideoDecoder();
   }
 
   // https://html.spec.whatwg.org/multipage/media.html#dom-media-seek
@@ -809,7 +817,11 @@ export class MediaPipeline implements MediaSourceAttachment {
       this.#lastVideoDecoderConfig = codecConfig;
       this.#needKeyFrame = true;
     }
-    if (direction === Direction.BACKWARD && BUG_DECODE_VIDEO_IN_REVERSE) {
+    const decodeInReverse =
+      direction === Direction.BACKWARD && this.#bugDecodeVideoInReverse;
+    if (decodeInReverse) {
+      // Bug: the decoder needs the frames in decode order, not in the order
+      // we're going to render them.
       frames.reverse();
     }
     const prerollEnd =
@@ -836,7 +848,7 @@ export class MediaPipeline implements MediaSourceAttachment {
       this.#videoDecoder.decode(frame);
       this.#decodingVideoFrames.push(frame);
     }
-    if (direction === Direction.BACKWARD && !BUG_DECODE_VIDEO_IN_REVERSE) {
+    if (direction === Direction.BACKWARD && !decodeInReverse) {
       // The decoder may hold on to the last few frames for reordering, until it
       // sees more input. Backward, the next batch is an earlier GOP, which we
       // might not decode until these frames come out, so flush them out now.
@@ -847,7 +859,7 @@ export class MediaPipeline implements MediaSourceAttachment {
     }
     // The "furthest decoded frame" depends on the rendering order,
     // since we must decode the frames in their original order.
-    if (direction === Direction.BACKWARD && !BUG_DECODE_VIDEO_IN_REVERSE) {
+    if (direction === Direction.BACKWARD && !decodeInReverse) {
       this.#furthestDecodingVideoFrame = frames[0];
     } else {
       this.#furthestDecodingVideoFrame = frames[frames.length - 1];
@@ -1034,6 +1046,32 @@ export class MediaPipeline implements MediaSourceAttachment {
     }
   }
 
+  #createVideoDecoder(): VideoDecoder {
+    const decoder = new VideoDecoder({
+      output: (frame) => this.#onVideoFrame(frame),
+      error: (error) => this.#onVideoDecoderError(decoder, error)
+    });
+    return decoder;
+  }
+
+  #onVideoDecoderError(decoder: VideoDecoder, error: DOMException): void {
+    if (decoder !== this.#videoDecoder || this.#stopped) {
+      return;
+    }
+    if (this.#bugDecodeVideoInReverse) {
+      // Bug showcase: feeding the decoder its frames in the wrong order
+      // makes it fail. Rather than stopping playback for good, leave the
+      // decoder closed, so video stalls until the next seek, rate change or
+      // until the bug is turned off. Then #resetVideoDecoder() replaces it.
+      console.warn(
+        `VideoDecoder: ${error.message} (bugDecodeVideoInReverse is on)`
+      );
+      return;
+    }
+    // https://html.spec.whatwg.org/multipage/media.html#fatal-decode-error
+    this.#fail("decode", `VideoDecoder: ${error.message}`);
+  }
+
   #resetVideoDecoder(): void {
     for (const frame of this.#decodedVideoFrames) {
       frame.close();
@@ -1046,6 +1084,9 @@ export class MediaPipeline implements MediaSourceAttachment {
     this.#needKeyFrame = true;
     if (this.#videoDecoder.state !== "closed") {
       this.#videoDecoder.reset();
+    } else if (!this.#stopped) {
+      // It closed itself after an error, see #onVideoDecoderError().
+      this.#videoDecoder = this.#createVideoDecoder();
     }
   }
 
