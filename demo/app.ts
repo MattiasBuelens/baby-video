@@ -111,13 +111,18 @@ function setupModeToggle(useWorker: boolean) {
   const label = mode.querySelector<HTMLElement>(".pipeline-mode-label")!;
   const url = new URL(location.href);
   if (useWorker) {
-    label.textContent = "MediaSource and media pipeline run in a worker.";
+    label.textContent =
+      "The MediaSource and media pipeline now run in a worker. " +
+      "This reloads the page with them on the main thread.";
     url.searchParams.delete("worker");
     switchButton.textContent = "🔀 Run on the main thread";
     switchButton.hidden = false;
   } else {
-    label.textContent =
-      "MediaSource and media pipeline run on the main thread.";
+    label.textContent = BabyMediaSource.canConstructInDedicatedWorker
+      ? "The MediaSource and media pipeline now run on the main thread. " +
+        "This reloads the page with them in a worker."
+      : "The MediaSource and media pipeline run on the main thread. " +
+        "This browser can't run them in a worker.";
     url.searchParams.set("worker", "");
     switchButton.textContent = "🔀 Run in a worker";
     switchButton.hidden = !BabyMediaSource.canConstructInDedicatedWorker;
@@ -125,7 +130,7 @@ function setupModeToggle(useWorker: boolean) {
   switchButton.addEventListener("click", () => {
     location.href = url.href;
   });
-  mode
+  document
     .querySelector<HTMLButtonElement>("button[name=block]")!
     .addEventListener("click", () => {
       const end = performance.now() + 2000;
