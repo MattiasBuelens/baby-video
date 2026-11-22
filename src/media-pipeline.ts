@@ -132,7 +132,11 @@ const audioBufferHwm = 2;
 // a seek. A small batch means more preroll frames to decode, which is cheap.
 const maxReverseAudioBatchFrames = 16;
 
-const DEBUG = false;
+// Verbose logging of the decode and render loops. Off by default, since it
+// logs for every frame. Turn it on with VITE_DEBUG=true, e.g.
+// `VITE_DEBUG=true npm run dev`. Vite replaces this with a constant, so the
+// logging is left out of builds without it.
+const DEBUG = import.meta.env.VITE_DEBUG === "true";
 
 // Bug showcases
 const BUG_DECODE_VIDEO_IN_REVERSE = false;
